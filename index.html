@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="vi" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Smart Timetable V2 – Thời khóa biểu</title>
+  <meta name="description" content="Tra cứu thời khóa biểu giáo viên, lớp, phòng học – chạy hoàn toàn trên trình duyệt.">
+  <meta name="theme-color" content="#2563EB">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/svg+xml" href="assets/icons/logo.svg">
+  <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+
+  <!-- Thư viện (đóng gói sẵn trong assets/vendor để chạy offline) -->
+  <link rel="stylesheet" href="assets/vendor/bootstrap.min.css">
+  <link rel="stylesheet" href="assets/vendor/bootstrap-icons/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ================= SIDEBAR ================= -->
+  <aside id="sidebar" class="sidebar">
+    <a class="brand" href="#/dashboard">
+      <img src="assets/icons/logo.svg" alt="Logo" width="38" height="38">
+      <div><b>Smart Timetable</b><small>Phiên bản 2.0</small></div>
+    </a>
+    <nav class="nav flex-column" aria-label="Menu chính">
+      <a class="nav-link" data-view="dashboard" href="#/dashboard"><i class="bi bi-speedometer2"></i> Dashboard</a>
+      <a class="nav-link" data-view="teacher" href="#/teacher"><i class="bi bi-person-workspace"></i> TKB Giáo Viên</a>
+      <a class="nav-link" data-view="class" href="#/class"><i class="bi bi-people"></i> TKB Lớp</a>
+      <a class="nav-link" data-view="stats" href="#/stats"><i class="bi bi-bar-chart-line"></i> Thống Kê</a>
+      <a class="nav-link" data-view="rooms" href="#/rooms"><i class="bi bi-door-open"></i> Phòng Học</a>
+      <a class="nav-link" data-view="check" href="#/check"><i class="bi bi-shield-check"></i> Kiểm Tra Lỗi <span id="chkBadge" class="badge rounded-pill text-bg-danger ms-auto" hidden>0</span></a>
+      <a class="nav-link" data-view="settings" href="#/settings"><i class="bi bi-gear"></i> Cài Đặt</a>
+    </nav>
+    <div class="sidebar-foot">
+      <button class="btn btn-sm btn-light w-100 mb-2" id="btnImport"><i class="bi bi-upload"></i> Nạp file TKB</button>
+      <small>Chạy hoàn toàn trên trình duyệt – dữ liệu không rời khỏi thiết bị.</small>
+    </div>
+  </aside>
+  <div id="backdrop" class="backdrop" hidden></div>
+
+  <div class="main">
+    <!-- ================= HEADER ================= -->
+    <header class="topbar">
+      <div class="topbar-row">
+        <button class="btn btn-light icon-btn d-lg-none" id="btnMenu" aria-label="Mở menu"><i class="bi bi-list"></i></button>
+        <div class="school">
+          <img src="assets/icons/logo.svg" alt="Logo trường" width="34" height="34">
+          <div class="school-name"><span id="hdSchool">THPT Chuyên Lê Quý Đôn</span><small>Hệ thống tra cứu thời khóa biểu</small></div>
+        </div>
+        <div class="gsearch">
+          <i class="bi bi-search"></i>
+          <input id="globalSearch" type="search" class="form-control" placeholder="Tìm giáo viên, lớp, môn, phòng…  ( / )" autocomplete="off" spellcheck="false" aria-label="Tìm kiếm toàn cục">
+          <div id="searchPanel" class="search-panel" hidden></div>
+        </div>
+        <div class="top-actions">
+          <button class="btn btn-primary btn-sm" id="btnInstallTop" hidden><i class="bi bi-download"></i> <span class="d-none d-md-inline">Cài đặt</span></button>
+          <button class="btn btn-light icon-btn" id="btnTheme" title="Chuyển giao diện sáng / tối" aria-label="Chuyển giao diện"><i class="bi bi-moon-stars"></i></button>
+        </div>
+      </div>
+      <div class="topbar-info">
+        <span class="info-chip"><i class="bi bi-calendar-event"></i> <b id="hdDay">—</b> · <span id="hdDate">—</span></span>
+        <span class="info-chip" id="hdWeek">—</span>
+        <span class="info-chip period-chip" id="hdPeriodBox"><i class="bi bi-bell"></i> <b id="hdPeriod">—</b> <small id="hdPeriodSub"></small></span>
+        <span class="info-chip clock"><i class="bi bi-clock"></i> <b id="hdClock">00:00:00</b></span>
+      </div>
+    </header>
+
+    <!-- ================= NỘI DUNG ================= -->
+    <main id="view" class="content" tabindex="-1"></main>
+  </div>
+</div>
+
+<!-- Modal QR -->
+<div class="modal fade" id="qrModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-sm">
+    <div class="modal-content glass">
+      <div class="modal-header border-0 pb-0"><h6 class="modal-title"><i class="bi bi-qr-code"></i> <span id="qrTitle">Mã QR</span></h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Đóng"></button></div>
+      <div class="modal-body text-center">
+        <div class="btn-group btn-group-sm mb-3" role="group">
+          <input type="radio" class="btn-check" name="qrMode" id="qrUrl" value="url" checked><label class="btn btn-outline-primary" for="qrUrl">Liên kết</label>
+          <input type="radio" class="btn-check" name="qrMode" id="qrTxt" value="text"><label class="btn btn-outline-primary" for="qrTxt">Văn bản</label>
+        </div>
+        <div id="qrBox" class="qr-box"></div>
+        <div id="qrHint" class="small text-muted mt-2"></div>
+        <div class="d-flex gap-2 justify-content-center mt-3">
+          <button class="btn btn-sm btn-light" id="qrCopy"><i class="bi bi-link-45deg"></i> Sao chép liên kết</button>
+          <button class="btn btn-sm btn-primary" id="qrDownload"><i class="bi bi-download"></i> Tải PNG</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="busy" class="busy" hidden><div class="spinner-border text-primary" role="status"></div><span id="busyMsg">Đang xử lý…</span></div>
+<div id="toastHost" class="toast-container position-fixed bottom-0 end-0 p-3"></div>
+<input type="file" id="fileInput" accept=".xls,.xlsx" multiple hidden>
+
+<!-- Thư viện bên thứ ba (UMD) -->
+<script src="assets/vendor/bootstrap.bundle.min.js"></script>
+<script src="assets/vendor/xlsx.full.min.js"></script>
+<script src="assets/vendor/chart.umd.js"></script>
+<script src="assets/vendor/qrcode.min.js"></script>
+<script src="assets/vendor/html2pdf.bundle.min.js"></script>
+<!-- Mã nguồn ứng dụng (ES modules) -->
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

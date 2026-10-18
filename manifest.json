@@ -1,0 +1,24 @@
+{
+  "name": "Smart Timetable V2 – Thời khóa biểu THPT",
+  "short_name": "Smart TKB",
+  "description": "Tra cứu thời khóa biểu giáo viên, lớp, phòng học – chạy hoàn toàn trên trình duyệt, dùng được offline.",
+  "id": "./index.html",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "lang": "vi",
+  "background_color": "#eef3fb",
+  "theme_color": "#2563EB",
+  "categories": ["education", "productivity"],
+  "icons": [
+    { "src": "assets/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "TKB Giáo Viên", "url": "./index.html#/teacher", "icons": [{ "src": "assets/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "TKB Lớp", "url": "./index.html#/class", "icons": [{ "src": "assets/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Phòng Học", "url": "./index.html#/rooms", "icons": [{ "src": "assets/icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}
