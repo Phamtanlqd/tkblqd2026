@@ -3,6 +3,7 @@
  * ===================================================================== */
 import {
   DAYS, PERIODS, escapeHtml, createCombobox, buildGridTable, subjectChip, subjectColor, periodInfo, dayName, formatDate,
+  sessionToggle, wireSessionToggle, periodRange,
 } from './utils.js';
 import { wireExportBar, exportHeader, shareUrl } from './export.js';
 
@@ -58,6 +59,8 @@ export function renderTeacher(host, ds, ctx, param) {
   let name = param ? decodeURIComponent(param) : ctx.state.selTeacher;
   if (!ds.teachers.some((t) => t.name === name)) name = (ds.teachers.find((t) => t.total > 0) || ds.teachers[0]).name;
   ctx.state.selTeacher = name;
+  const session = ctx.state.session || 'all';
+  const range = periodRange(session, ds.maxPeriod);
   const idx = ds.teachers.findIndex((t) => t.name === name);
   const t = ds.teachers[idx];
   const recs = (ds.byTeacher.get(name) || []).filter((r) => !r.event);
@@ -93,6 +96,7 @@ export function renderTeacher(host, ds, ctx, param) {
       <div class="col-xl-8">
         <div class="glass card-pad">
           <div class="card-title-row"><h6><i class="bi bi-table"></i> Thời khóa biểu tuần</h6>
+            ${sessionToggle(session, ds.maxPeriod)}
             <div class="export-bar no-export">
               <button class="btn btn-sm btn-light" data-export="print"><i class="bi bi-printer"></i> In</button>
               <button class="btn btn-sm btn-light" data-export="pdf"><i class="bi bi-file-earmark-pdf"></i> PDF</button>
@@ -102,7 +106,8 @@ export function renderTeacher(host, ds, ctx, param) {
             </div></div>
           <div id="tExport">
             ${exportHeader(ds.school, `TKB giáo viên: ${t.name}`, `${t.subject || ''} · ${t.total} tiết/tuần${ds.meta.week ? ` · Tuần ${ds.meta.week}` : ''}`)}
-            ${buildGridTable(ds.maxPeriod, (d, p) => teacherCell(slot.get(`${d}|${p}`)), { id: 'tTable' })}
+            ${buildGridTable(ds.maxPeriod, (d, p) => teacherCell(slot.get(`${d}|${p}`)), { id: 'tTable', range })}
+            ${ds.hasAfternoon && session !== 'am' ? '<p class="legend no-export">CK, HSG-CT, HSG-QG, Tự chọn: ký hiệu theo thời khóa biểu buổi chiều của trường.</p>' : ''}
           </div>
         </div>
       </div>
@@ -118,13 +123,14 @@ export function renderTeacher(host, ds, ctx, param) {
   host.querySelector('#prevT').onclick = () => go(-1);
   host.querySelector('#nextT').onclick = () => go(1);
 
+  wireSessionToggle(host, ctx);
   wireExportBar(host, {
     getEl: () => host.querySelector('#tExport'),
     getName: () => `tkb-${t.name}`,
     getAOA: () => [
       [`TKB giáo viên: ${t.name}`, t.subject, `${t.total} tiết`], [],
       ['Tiết', ...DAYS.map((d) => d.name)],
-      ...Array.from({ length: ds.maxPeriod }, (_, i) => [`Tiết ${i + 1}`, ...DAYS.map((d) => (slot.get(`${d.n}|${i + 1}`) || []).map((r) => `${r.class} - ${r.subject}`).join('\n'))]),
+      ...Array.from({ length: range[1] - range[0] + 1 }, (_, k) => k + range[0] - 1).map((i) => [`Tiết ${i + 1}`, ...DAYS.map((d) => (slot.get(`${d.n}|${i + 1}`) || []).map((r) => `${r.class} - ${r.subject}`).join('\n'))]),
     ],
     getQR: () => ({
       title: `TKB ${t.name}`,

@@ -1,7 +1,7 @@
 /* =====================================================================
  * settings.js – Trang "Cài Đặt": giao diện, nạp file, cấu hình tiết, phòng, PWA
  * ===================================================================== */
-import { PERIODS, DEFAULT_PERIODS, escapeHtml, toast, SUBJECTS, APP_VERSION, formatDate } from './utils.js';
+import { PERIODS, DEFAULT_PERIODS, escapeHtml, toast, SUBJECTS, APP_VERSION, formatDate, subjectName } from './utils.js';
 import { hashPassword } from './auth.js';
 
 /** Giao diện cho người xem: chỉ đổi giao diện, cài ứng dụng và đăng nhập quản trị */
@@ -43,6 +43,25 @@ function renderVisitor(host, ds, ctx) {
   };
 }
 
+/** Thẻ gán tên giáo viên buổi chiều: các tên viết tắt chưa khớp được duy nhất */
+function aliasCard(ds) {
+  const names = ds.teachers.map((t) => t.name);
+  const rows = ds.unresolved.map((g, i) => {
+    const cand = g.candidates?.length ? g.candidates : [];
+    const rest = names.filter((n) => !cand.includes(n));
+    return `<div class="alias-row"><div class="small"><b>${escapeHtml(g.short)}</b> · ${escapeHtml(subjectName(g.subjectCode) || 'chưa rõ môn')}${g.kind ? ' · ' + escapeHtml(g.kind) : ''}
+        <span class="text-muted">(${g.slots} tiết, lớp ${escapeHtml(g.classes.join(', '))})</span></div>
+      <select class="form-select form-select-sm alias-sel" data-key="${escapeHtml(g.key)}"><option value="">— chọn giáo viên —</option>
+        ${cand.length ? `<optgroup label="Gợi ý">${cand.map((n) => `<option>${escapeHtml(n)}</option>`).join('')}</optgroup>` : ''}
+        <optgroup label="Tất cả giáo viên">${rest.map((n) => `<option>${escapeHtml(n)}</option>`).join('')}</optgroup></select></div>`;
+  }).join('');
+  return `<div class="glass card-pad mb-3"><div class="card-title-row"><h6><i class="bi bi-person-lines-fill"></i> Gán tên giáo viên buổi chiều</h6></div>
+    ${rows ? `<p class="small text-muted">TKB chiều ghi tên viết tắt. Các tên sau chưa khớp được duy nhất với họ tên đầy đủ:</p>${rows}
+      <button class="btn btn-primary btn-sm mt-2" id="btnAliasSave"><i class="bi bi-save"></i> Lưu cách gán</button>`
+      : '<p class="small text-success mb-0"><i class="bi bi-check-circle"></i> Tất cả tên giáo viên buổi chiều đã được khớp tự động.</p>'}
+    ${Object.keys(ds.aliases || {}).length ? '<button class="btn btn-link btn-sm px-0 mt-1" id="btnAliasClear">Xóa các cách gán đã lưu</button>' : ''}</div>`;
+}
+
 export function renderSettings(host, ds, ctx) {
   if (!ctx.isAdmin()) return renderVisitor(host, ds, ctx);
   const s = ctx.settings;
@@ -74,9 +93,9 @@ export function renderSettings(host, ds, ctx) {
           <div class="card-title-row"><h6><i class="bi bi-cloud-arrow-up"></i> Dữ liệu thời khóa biểu</h6></div>
           <div id="dropZone" class="drop-zone"><i class="bi bi-file-earmark-excel"></i>
             <p class="mb-1"><b>Kéo thả file .xls / .xlsx vào đây</b></p>
-            <p class="small text-muted mb-2">Tự nhận dạng TKB giáo viên hoặc TKB lớp – có thể chọn cả hai file cùng lúc.</p>
+            <p class="small text-muted mb-2">Tự nhận dạng TKB giáo viên, TKB lớp (sáng) hoặc TKB buổi chiều – có thể chọn nhiều file cùng lúc.</p>
             <button class="btn btn-primary" id="btnPick"><i class="bi bi-upload"></i> Chọn file</button></div>
-          ${fileInfo('TKB giáo viên', src.teacher)}${fileInfo('TKB lớp', src.class)}
+          ${fileInfo('TKB giáo viên', src.teacher)}${fileInfo('TKB lớp (buổi sáng)', src.class)}${fileInfo('TKB buổi chiều', src.afternoon)}
           ${ds.meta.start ? `<p class="small text-muted mt-2 mb-0">Tuần áp dụng: ${formatDate(new Date(ds.meta.start))} – ${formatDate(new Date(ds.meta.end))}</p>` : ''}
           <div class="d-flex gap-2 mt-3 flex-wrap">
             <button class="btn btn-outline-primary btn-sm" id="btnSample"><i class="bi bi-arrow-repeat"></i> Nạp lại dữ liệu mẫu</button>
@@ -107,6 +126,7 @@ export function renderSettings(host, ds, ctx) {
           </tbody></table></div>
           <button class="btn btn-primary btn-sm" id="btnPeriodSave"><i class="bi bi-save"></i> Lưu giờ học</button>
         </div>
+        ${ds.hasAfternoon ? aliasCard(ds) : ''}
         <div class="glass card-pad">
           <div class="card-title-row"><h6><i class="bi bi-door-open"></i> Phòng học</h6></div>
           <div class="form-check form-switch mb-3"><input class="form-check-input" type="checkbox" id="swClassRoom" ${s.useClassRoom !== false ? 'checked' : ''}>
@@ -130,6 +150,12 @@ export function renderSettings(host, ds, ctx) {
     if (pw.length < 6) return toast('Mật khẩu nên có ít nhất 6 ký tự', 'warning');
     host.querySelector('#pwOut').value = `ADMIN_HASH: '${await hashPassword(pw)}',`;
   };
+  host.querySelector('#btnAliasSave')?.addEventListener('click', () => {
+    const alias = { ...(s.teacherAlias || {}) };
+    host.querySelectorAll('.alias-sel').forEach((sel) => { if (sel.value) alias[sel.dataset.key] = sel.value; });
+    ctx.saveSettings({ ...s, teacherAlias: alias }); toast('Đã lưu cách gán tên giáo viên', 'success');
+  });
+  host.querySelector('#btnAliasClear')?.addEventListener('click', () => { ctx.saveSettings({ ...s, teacherAlias: {} }); toast('Đã xóa các cách gán', 'primary'); });
   const pick = host.querySelector('#btnPick');
   pick.onclick = () => ctx.pickFiles();
   const dz = host.querySelector('#dropZone');

@@ -4,7 +4,7 @@
  *  - Mã nguồn / HTML: network-first (luôn lấy bản mới khi có mạng), rơi về cache khi offline
  * Đổi CACHE_VERSION mỗi lần phát hành để làm mới cache.
  * ===================================================================== */
-const CACHE_VERSION = 'smart-tkb-v2.1.0';
+const CACHE_VERSION = 'smart-tkb-v2.2.0';
 const PRECACHE = [
   './', 'index.html', 'manifest.json', 'css/style.css',
   'js/app.js', 'js/utils.js', 'js/data-loader.js', 'js/dashboard.js', 'js/teacher.js', 'js/class.js',
@@ -14,7 +14,7 @@ const PRECACHE = [
   'assets/vendor/bootstrap-icons/bootstrap-icons.min.css',
   'assets/vendor/bootstrap-icons/fonts/bootstrap-icons.woff2', 'assets/vendor/bootstrap-icons/fonts/bootstrap-icons.woff',
   'assets/icons/logo.svg', 'assets/icons/icon-192.png', 'assets/icons/icon-512.png', 'assets/icons/icon-maskable-512.png', 'assets/icons/apple-touch-icon.png',
-  'assets/data/tkb-giao-vien.xlsx', 'assets/data/tkb-lop.xls',
+  'assets/data/tkb-giao-vien.xlsx', 'assets/data/tkb-lop.xls', 'assets/data/tkb-lop-chieu.xlsx',
 ];
 
 self.addEventListener('install', (e) => {

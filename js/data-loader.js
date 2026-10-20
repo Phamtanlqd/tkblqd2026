@@ -5,7 +5,7 @@
  * ===================================================================== */
 import {
   cleanText, normalize, isClassName, normClass, gradeOf, parseSubject, subjectName,
-  naturalCompare, DEFAULT_SCHOOL,
+  naturalCompare, DEFAULT_SCHOOL, AFTERNOON_FIRST, KIND_SHORT,
 } from './utils.js';
 
 /* ---------------------------------------------------------------------
@@ -108,7 +108,14 @@ export function detectSheet(grid) {
     }
     // TKB lớp: một dòng có ≥3 ô là tên lớp (10A1, 11B2…)
     const classCols = row.map((v, i) => (typeof v === 'string' && isClassName(v) ? i : -1)).filter((i) => i >= 0);
-    if (classCols.length >= 3) return { kind: 'class', headerRow: r, firstClassCol: classCols[0] };
+    if (classCols.length >= 3) {
+      // TKB lớp buổi sáng có cột "tiết" (số 1..n) bên trái; TKB buổi chiều chỉ có nhãn thứ, mỗi thứ là một khối dòng
+      let periodCells = 0;
+      for (let k = r + 1; k < Math.min(grid.length, r + 40); k++) {
+        for (let c = 0; c < classCols[0]; c++) if (asInt(grid[k][c]) > 0) periodCells++;
+      }
+      return { kind: periodCells >= 3 ? 'class' : 'afternoon', headerRow: r, firstClassCol: classCols[0] };
+    }
   }
   // Sheet đơn (mỗi sheet 1 lớp / 1 giáo viên): dòng có ≥4 nhãn thứ
   for (let r = 0; r < lim; r++) if (countDays(grid[r]) >= 4) return { kind: 'entity', headerRow: r };
@@ -199,6 +206,151 @@ function parseClassSheet(grid, { headerRow, firstClassCol }) {
   return { records, classes: Object.values(classCols), notes, issues };
 }
 
+
+/* ---------------------------------------------------------------------
+ * TKB buổi chiều: mỗi thứ là một khối dòng (ô gộp cột A), không có cột tiết.
+ * Dòng thứ k của khối = tiết (AFTERNOON_FIRST + k - 1).
+ * Ô có dạng: "GDĐP Hường", "Hóa CK Hồng", "HSGCT Lý 10 - Thoa", "HSG QG ANH - Hương",
+ *            "AI - Hằng", "TC Hóa - Tú", "Thỉnh giảng", "Sinh hoạt CLB …"
+ * ------------------------------------------------------------------- */
+const HINT_SUBJECT = { NN: ['NN'], 'Đ': ['DIA'], H: ['HOA'], S: ['SU', 'SINH'] };
+
+/** Tách tên giáo viên viết tắt và hậu tố gợi ý bộ môn ("Tuyết NN", "HuyênĐ", "AnhS") */
+function splitTeacherHint(raw) {
+  let t = cleanText(raw), hint = '';
+  let m = t.match(/^(.*\S)\s+(NN)$/);
+  if (m) return { name: m[1], hint: m[2] };
+  m = t.match(/^(.*[a-zà-ỹ])(NN)$/);
+  if (m) return { name: m[1], hint: 'NN' };
+  const words = t.split(' ');
+  const last = words[words.length - 1];
+  m = last.match(/^(.+?[a-zà-ỹ])([A-ZĐ])$/);
+  if (m && !last.includes('.')) { words[words.length - 1] = m[1]; t = words.join(' '); hint = m[2]; }
+  return { name: t, hint };
+}
+
+/** Phân tích một ô TKB buổi chiều */
+export function parseAfternoonCell(text) {
+  const raw = cleanText(text);
+  if (!raw) return null;
+  if (/^th[ỉi]nh gi[ảa]ng$/i.test(raw)) return { visiting: true };
+  if (/^sinh ho[ạa]t\b/i.test(raw) || raw.length > 45) return { event: true, text: raw };
+
+  let left = raw, right = '';
+  const hy = raw.match(/^(.*?)\s*[-–—]\s*(.+)$/);
+  if (hy) { left = hy[1].trim(); right = hy[2].trim(); }
+  const words = left.split(/\s+/).filter(Boolean);
+  let kind = '';
+  const head = normalize(words[0] || '');
+  if (head === 'hsgct' || head === 'hsgqg') { kind = head === 'hsgct' ? 'HSGCT' : 'HSGQG'; words.shift(); }
+  else if (head === 'hsg') {
+    const nx = normalize(words[1] || '');
+    if (nx === 'ct' || nx === 'qg') { kind = nx === 'ct' ? 'HSGCT' : 'HSGQG'; words.splice(0, 2); } else words.shift();
+  } else if (head === 'tc' && hy) { kind = 'TC'; words.shift(); }
+
+  let teacherRaw = right;
+  if (!hy) {                                  // dạng "Môn [CK] Tên": từ cuối là tên giáo viên
+    teacherRaw = words.length > 1 ? words.pop() : '';
+    if (!teacherRaw && words.length === 1) { teacherRaw = ''; }
+  }
+  if (words.length && normalize(words[words.length - 1]) === 'ck') { kind = kind || 'CK'; words.pop(); }
+
+  const gradeM = words.join(' ').match(/\d{2}/);
+  const subjectRaw = words.map((w) => w.replace(/\d+/g, '')).filter(Boolean).join(' ');
+  const { name, hint } = splitTeacherHint(teacherRaw);
+  const subj = subjectRaw ? parseSubject(subjectRaw) : { code: '' };
+  return { kind, grade: gradeM ? +gradeM[0] : 0, subjectCode: subj.code, subjectRaw, teacherShort: name, hint };
+}
+
+function parseAfternoonSheet(grid, { headerRow, firstClassCol }) {
+  const classCols = {};
+  grid[headerRow].forEach((v, i) => { if (i >= firstClassCol && typeof v === 'string' && isClassName(v)) classCols[i] = normClass(v); });
+  const records = [], notes = [], issues = [];
+  let day = 0, idx = 0;
+  for (let r = headerRow + 1; r < grid.length; r++) {
+    const row = grid[r];
+    let d = 0;
+    for (let c = 0; c < firstClassCol; c++) d = d || parseDay(row[c]);
+    if (!d) {
+      const note = cleanText(row.find((v) => typeof v === 'string' && v.length > 25) || '');
+      if (note && !notes.includes(note)) notes.push(note);
+      continue;
+    }
+    if (d === day) idx++; else { day = d; idx = 0; }
+    const period = AFTERNOON_FIRST + idx;
+    for (const [c, cls] of Object.entries(classCols)) {
+      const v = row[c];
+      if (v === null) continue;
+      const cell = parseAfternoonCell(v);
+      if (!cell) continue;
+      const base = { teacher: '', teacherShort: '', class: cls, room: '', day, period, kind: '', grade: 0, hint: '' };
+      if (cell.visiting) records.push({ ...base, subjectCode: 'EVENT', event: true, eventText: 'Thỉnh giảng', kind: 'visiting' });
+      else if (cell.event) {
+        const full = cell.text;
+        const short = full.split(/\.\s+(?=Tại)/)[0].replace(/\s+/g, ' ');
+        if (short !== full && !notes.includes(full)) notes.push(full);
+        records.push({ ...base, subjectCode: 'EVENT', event: true, eventText: short === short.toUpperCase() ? short.charAt(0) + short.slice(1).toLowerCase() : short });
+      } else records.push({ ...base, ...cell, event: false, eventText: '' });
+    }
+  }
+  return { records, classes: Object.values(classCols), notes, issues };
+}
+
+
+/* ---------------------------------------------------------------------
+ * Khớp tên giáo viên viết tắt của TKB buổi chiều ("Hồng", "Ng.Hạnh", "L.Thủy")
+ * với họ tên đầy đủ trong TKB giáo viên buổi sáng.
+ * ------------------------------------------------------------------- */
+function shortParts(short) {
+  const abbr = [], core = [];
+  cleanText(short).replace(/\./g, '. ').split(' ').filter(Boolean).forEach((t) => {
+    if (t.endsWith('.')) abbr.push(normalize(t.slice(0, -1))); else core.push(normalize(t));
+  });
+  return { abbr, core };
+}
+const nameMatches = (words, { abbr, core }) => {
+  if (!core.length || words.length < core.length) return false;
+  const tail = words.slice(-core.length);
+  if (!core.every((w, i) => w === tail[i])) return false;
+  const front = words.slice(0, words.length - core.length);
+  return abbr.every((a) => front.some((w) => w.startsWith(a)));
+};
+
+/** Chỉ mục giáo viên dựng từ các bản ghi buổi sáng: tên, môn đã dạy, lớp đã dạy */
+function buildTeacherIndex(records, extraNames) {
+  const byName = new Map();
+  const touch = (name) => {
+    if (!byName.has(name)) byName.set(name, { name, words: normalize(name).split(' ').filter(Boolean), subjects: new Set(), classes: new Set(), cnt: {} });
+    return byName.get(name);
+  };
+  extraNames.forEach(touch);
+  for (const r of records) {
+    if (!r.teacher || r.event) continue;
+    const t = touch(r.teacher);
+    if (r.subjectCode) { t.subjects.add(r.subjectCode); t.cnt[r.subjectCode] = (t.cnt[r.subjectCode] || 0) + 1; }
+    t.classes.add(r.class);
+  }
+  byName.forEach((t) => { t.mainSubject = Object.keys(t.cnt).sort((a, b) => t.cnt[b] - t.cnt[a])[0] || ''; });
+  return { byName, list: [...byName.values()] };
+}
+
+/** Trả về { name, weak, candidates }: name rỗng nếu chưa khớp được duy nhất */
+function resolveTeacher(a, idx, aliases = {}) {
+  const nk = normalize(a.teacherShort);
+  for (const k of [`${nk}|${a.subjectCode || ''}`, `${nk}|*`]) {
+    if (aliases[k] && idx.byName.has(aliases[k])) return { name: aliases[k], weak: false };
+  }
+  const parts = shortParts(a.teacherShort);
+  let c = idx.list.filter((t) => nameMatches(t.words, parts));
+  if (!c.length) return { name: '', candidates: [] };
+  const narrow = (pred) => { const f = c.filter(pred); if (f.length) c = f; };
+  if (c.length > 1 && a.subjectCode) narrow((t) => t.subjects.has(a.subjectCode));
+  if (c.length > 1) narrow((t) => t.classes.has(a.class));
+  if (c.length > 1 && a.hint && HINT_SUBJECT[a.hint]) narrow((t) => HINT_SUBJECT[a.hint].some((x) => t.subjects.has(x)));
+  if (c.length === 1) return { name: c[0].name, weak: !!a.subjectCode && a.subjectCode !== 'AI' && !c[0].subjects.has(a.subjectCode) && c[0].subjects.size > 0 };
+  return { name: '', candidates: c.map((t) => t.name) };
+}
+
 /** Sheet đơn: tên sheet (hoặc tiêu đề) là lớp / giáo viên; dòng = tiết, cột = thứ */
 function parseEntitySheet(grid, { headerRow }, sheetName) {
   let entity = cleanText(sheetName);
@@ -243,7 +395,8 @@ export function parseWorkbook(XLSX, buffer, fileName = '') {
   const wb = XLSX.read(buffer, { type: 'array', cellDates: false });
   const T = { records: [], teachers: [], notes: [], issues: [], meta: null, fileName };
   const C = { records: [], classes: [], notes: [], issues: [], meta: null, fileName };
-  let hasT = false, hasC = false;
+  const A = { records: [], classes: [], notes: [], issues: [], meta: null, fileName };
+  let hasT = false, hasC = false, hasA = false;
 
   for (const name of wb.SheetNames) {
     const grid = sheetToGrid(XLSX, wb.Sheets[name]);
@@ -255,6 +408,10 @@ export function parseWorkbook(XLSX, buffer, fileName = '') {
       const r = parseTeacherSheet(grid, det);
       T.records.push(...r.records); T.teachers.push(...r.teachers); T.issues.push(...r.issues);
       T.meta = T.meta || meta; hasT = true;
+    } else if (det.kind === 'afternoon') {
+      const r = parseAfternoonSheet(grid, det);
+      A.records.push(...r.records); A.classes.push(...r.classes); A.notes.push(...r.notes);
+      A.meta = A.meta || meta; hasA = true;
     } else if (det.kind === 'class') {
       const r = parseClassSheet(grid, det);
       C.records.push(...r.records); C.classes.push(...r.classes); C.notes.push(...r.notes);
@@ -265,7 +422,7 @@ export function parseWorkbook(XLSX, buffer, fileName = '') {
       else { C.records.push(...r.records); if (!C.classes.includes(normClass(r.entity))) C.classes.push(normClass(r.entity)); C.meta = C.meta || meta; hasC = true; }
     }
   }
-  return { teacher: hasT ? T : null, class: hasC ? C : null };
+  return { teacher: hasT ? T : null, class: hasC ? C : null, afternoon: hasA ? A : null };
 }
 
 /** Đọc File do người dùng chọn, trả về {teacher, class} (có thể rỗng) */
@@ -276,13 +433,15 @@ export async function parseFile(XLSX, file) {
 
 /** Nạp dữ liệu mẫu đi kèm (assets/data) – dùng khi chưa có dữ liệu nào */
 export async function loadSampleSources(XLSX) {
-  const out = { teacher: null, class: null };
-  for (const [url, name] of [['assets/data/tkb-giao-vien.xlsx', 'tkb-giao-vien.xlsx'], ['assets/data/tkb-lop.xls', 'tkb-lop.xls']]) {
+  const out = { teacher: null, class: null, afternoon: null };
+  const files = [['assets/data/tkb-giao-vien.xlsx', 'tkb-giao-vien.xlsx', true], ['assets/data/tkb-lop.xls', 'tkb-lop.xls', true], ['assets/data/tkb-lop-chieu.xlsx', 'tkb-lop-chieu.xlsx', false]];
+  for (const [url, name, required] of files) {
     const res = await fetch(url);
-    if (!res.ok) throw new Error('Không tải được ' + url);
+    if (!res.ok) { if (required) throw new Error('Không tải được ' + url); continue; }   // file buổi chiều là tùy chọn
     const r = parseWorkbook(XLSX, await res.arrayBuffer(), name);
     if (r.teacher) out.teacher = r.teacher;
     if (r.class) out.class = r.class;
+    if (r.afternoon) out.afternoon = r.afternoon;
   }
   return out;
 }
@@ -325,9 +484,32 @@ export function buildDataset(sources, settings = {}) {
     });
   }
 
+  /* --- TKB buổi chiều: khớp tên giáo viên viết tắt rồi nối vào danh sách --- */
+  const A = sources?.afternoon?.records || [];
+  const unresolvedMap = new Map();
+  const weakList = [];
+  if (A.length) {
+    const idx = buildTeacherIndex(records, sources?.teacher?.teachers || []);
+    for (const a of A) {
+      const base = { class: a.class, day: a.day, period: a.period, room: '', kind: a.kind || '', afternoon: true, inClassFile: true, fromTeacherFile: false };
+      if (a.event) { records.push({ ...base, teacher: '', teacherShort: '', subjectCode: 'EVENT', classSubjectCode: null, event: true, eventText: a.eventText }); continue; }
+      const res = a.teacherShort ? resolveTeacher(a, idx, settings.teacherAlias || {}) : { name: '' };
+      let code = a.subjectCode;
+      if (!code && res.name) code = idx.byName.get(res.name)?.mainSubject || '';
+      records.push({ ...base, teacher: res.name || '', teacherShort: res.name ? '' : a.teacherShort, subjectCode: code, classSubjectCode: code, event: false, eventText: '', teacherWeak: !!res.weak });
+      if (a.teacherShort && !res.name) {
+        const k = `${normalize(a.teacherShort)}|${code || ''}`;
+        const g = unresolvedMap.get(k) || { key: k, short: a.teacherShort, subjectCode: code || '', kind: a.kind, classes: new Set(), slots: 0, candidates: res.candidates || [] };
+        g.classes.add(a.class); g.slots++; unresolvedMap.set(k, g);
+      }
+      if (res.weak) weakList.push({ short: a.teacherShort, teacher: res.name, subjectCode: code, cls: a.class, day: a.day, period: a.period });
+    }
+  }
+
   /* --- gán phòng, tên môn, khối --- */
   for (const r of records) {
-    r.subject = r.event ? r.eventText : subjectName(r.subjectCode);
+    r.session = r.period >= AFTERNOON_FIRST ? 'pm' : 'am';
+    r.subject = r.event ? r.eventText : [subjectName(r.subjectCode), KIND_SHORT[r.kind]].filter(Boolean).join(' · ');
     r.grade = gradeOf(r.class);
     r.roomAuto = false;
     if (!r.room && !r.event) {
@@ -361,7 +543,7 @@ export function buildDataset(sources, settings = {}) {
   });
 
   /* --- danh sách lớp --- */
-  const classNames = new Set([...(sources?.class?.classes || []), ...byClass.keys()]);
+  const classNames = new Set([...(sources?.class?.classes || []), ...(sources?.afternoon?.classes || []), ...byClass.keys()]);
   const classes = [...classNames].sort(naturalCompare).map((name) => ({
     name, grade: gradeOf(name), total: (byClass.get(name) || []).filter((x) => !x.event).length,
   }));
@@ -374,20 +556,21 @@ export function buildDataset(sources, settings = {}) {
 
   const rooms = [...byRoom.keys()].sort(naturalCompare);
   const maxPeriod = Math.max(5, ...records.map((r) => r.period));
-  const metas = [sources?.class?.meta, sources?.teacher?.meta].filter(Boolean);
-  const meta = { ...(metas[1] || {}), ...(metas[0] || {}) };
-  meta.school = metas.map((m) => m.school).find((s) => /thpt/i.test(s || '')) || metas[0]?.school || metas[1]?.school || '';
-  meta.week = metas[0]?.week || metas[1]?.week || 0;
-  meta.start = metas[0]?.start || metas[1]?.start || null;
-  meta.end = metas[0]?.end || metas[1]?.end || null;
+  const metas = [sources?.class?.meta, sources?.teacher?.meta, sources?.afternoon?.meta].filter(Boolean);
+  const meta = { ...Object.assign({}, ...metas.slice().reverse()) };
+  meta.school = metas.map((m) => m.school).find((x) => /thpt/i.test(x || '')) || metas.find((m) => m.school)?.school || '';
+  meta.week = metas.find((m) => m.week)?.week || 0;
+  meta.start = metas.find((m) => m.start)?.start || null;
+  meta.end = metas.find((m) => m.end)?.end || null;
   const teaching = records.filter((r) => !r.event);
-  const notes = sources?.class?.notes || [];
+  const notes = [...new Set([...(sources?.class?.notes || []), ...(sources?.afternoon?.notes || [])])];
 
   return {
     records, teachers, classes, subjects, rooms, byTeacher, byClass, byRoom, bySlot, bySubject,
     maxPeriod, meta, notes, school: cleanSchool(meta.school),
     totals: { teachers: teachers.length, classes: classes.length, subjects: subjects.length, periods: teaching.length, rooms: rooms.length },
-    hasTeacherFile: !!sources?.teacher, hasClassFile: !!sources?.class,
+    hasTeacherFile: !!sources?.teacher, hasClassFile: !!sources?.class, hasAfternoon: !!sources?.afternoon,
+    unresolved: [...unresolvedMap.values()].map((g) => ({ ...g, classes: [...g.classes].sort(naturalCompare) })), weakMatches: weakList, aliases: settings.teacherAlias || {},
     parseIssues: [...(sources?.teacher?.issues || []), ...(sources?.class?.issues || [])],
   };
 }

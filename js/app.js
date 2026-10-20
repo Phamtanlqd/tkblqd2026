@@ -22,12 +22,13 @@ let ds = buildDataset({}, {});
 let deferredInstall = null;
 const ctx = {
   state: {},                                   // trạng thái giao diện (lớp / GV đang chọn…)
-  sources: { teacher: null, class: null },     // dữ liệu đã chuẩn hóa theo từng loại file
+  sources: { teacher: null, class: null, afternoon: null },     // dữ liệu đã chuẩn hóa theo từng loại file
   settings: lsGet(LS.settings, { useClassRoom: true, subjectRooms: {} }),
   theme: 'light',
   canInstall: () => !!deferredInstall,
   install, pickFiles, importFiles, reloadSample, clearData, setTheme, savePeriods, saveSettings,
   isAdmin, authEnabled, sessionLeftMinutes, doLogin, doLogout,
+  rerender: () => route(true),
 };
 
 const VIEWS = {
@@ -70,7 +71,7 @@ async function doLogin(pw) {
   const r = await login(pw);
   if (r.ok) {
     const saved = lsGet(LS.sources);               // quản trị: ưu tiên dữ liệu đang xem trước trên máy này
-    if (saved && (saved.teacher || saved.class)) { ctx.sources = { teacher: saved.teacher || null, class: saved.class || null }; rebuild(); }
+    if (saved && (saved.teacher || saved.class || saved.afternoon)) { ctx.sources = { teacher: saved.teacher || null, class: saved.class || null, afternoon: saved.afternoon || null }; rebuild(); }
     applyAuthUI(); route(); toast('Đã đăng nhập quản trị', 'success');
   }
   return r;
@@ -82,7 +83,7 @@ async function doLogout() {
 }
 /** Nạp dữ liệu đã công bố (assets/data). Trả về true nếu thành công */
 async function loadPublished() {
-  try { const s = await loadSampleSources(window.XLSX); ctx.sources = { teacher: s.teacher, class: s.class }; return true; }
+  try { const s = await loadSampleSources(window.XLSX); ctx.sources = { teacher: s.teacher, class: s.class, afternoon: s.afternoon }; return true; }
   catch { return false; }
 }
 
@@ -115,7 +116,8 @@ async function importFiles(files) {
       const r = await parseFile(window.XLSX, f);
       if (r.teacher) { ctx.sources.teacher = r.teacher; got++; toast(`${f.name}: nhận dạng TKB giáo viên (${r.teacher.records.length} tiết, ${r.teacher.teachers.length} GV)`, 'success', 4200); }
       if (r.class) { ctx.sources.class = r.class; got++; toast(`${f.name}: nhận dạng TKB lớp (${r.class.classes.length} lớp)`, 'success', 4200); }
-      if (!r.teacher && !r.class) toast(`${f.name}: không nhận dạng được cấu trúc TKB`, 'danger', 5000);
+      if (r.afternoon) { ctx.sources.afternoon = r.afternoon; got++; toast(`${f.name}: nhận dạng TKB buổi chiều (${r.afternoon.records.length} ô, ${r.afternoon.classes.length} lớp)`, 'success', 4200); }
+      if (!r.teacher && !r.class && !r.afternoon) toast(`${f.name}: không nhận dạng được cấu trúc TKB`, 'danger', 5000);
     }
     if (got) { persist(); rebuild(); route(); toast(`Hoàn tất trong ${Math.round(performance.now() - t0)} ms`, 'primary', 2200); }
   } catch (e) {
@@ -129,7 +131,7 @@ async function reloadSample() {
   setBusy(true, 'Đang nạp dữ liệu mẫu…');
   try {
     const s = await loadSampleSources(window.XLSX);
-    ctx.sources = { teacher: s.teacher, class: s.class };
+    ctx.sources = { teacher: s.teacher, class: s.class, afternoon: s.afternoon };
     lsDel(LS.sources); rebuild(); route();
     toast('Đã nạp lại dữ liệu đã công bố', 'success');
   } catch (e) {
@@ -138,7 +140,7 @@ async function reloadSample() {
 }
 function clearData() {
   if (!guard()) return;
-  ctx.sources = { teacher: null, class: null };
+  ctx.sources = { teacher: null, class: null, afternoon: null };
   lsDel(LS.sources); rebuild(); route(); toast('Đã xóa dữ liệu lưu trên máy này', 'primary');
 }
 function saveSettings(s) { if (!guard()) return; ctx.settings = s; lsSet(LS.settings, s); rebuild(); route(); }
@@ -264,10 +266,10 @@ async function init() {
   // Dữ liệu: đã lưu → mẫu đi kèm → trống
   // Người xem luôn thấy dữ liệu đã công bố (assets/data); quản trị đang đăng nhập thì ưu tiên bản xem trước lưu trên máy.
   const saved = lsGet(LS.sources);
-  const hasSaved = saved && (saved.teacher || saved.class);
-  if (isAdmin() && authEnabled() && hasSaved) ctx.sources = { teacher: saved.teacher || null, class: saved.class || null };
-  else if (!(await loadPublished()) && hasSaved) ctx.sources = { teacher: saved.teacher || null, class: saved.class || null };
-  else if (!authEnabled() && hasSaved && !ctx.sources.teacher && !ctx.sources.class) ctx.sources = { teacher: saved.teacher || null, class: saved.class || null };
+  const hasSaved = saved && (saved.teacher || saved.class || saved.afternoon);
+  const fromSaved = () => { ctx.sources = { teacher: saved.teacher || null, class: saved.class || null, afternoon: saved.afternoon || null }; };
+  if (isAdmin() && authEnabled() && hasSaved) fromSaved();
+  else if (!(await loadPublished()) && hasSaved) fromSaved();
   rebuild();
   route();
   setInterval(updateHeader, 1000);

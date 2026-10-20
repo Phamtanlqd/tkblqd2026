@@ -260,6 +260,15 @@ body {
 .issue-table td, .issue-table th { font-size: .9rem; }
 .glass-alert { background: var(--glass-bg); border: 1px solid var(--border); color: var(--text); border-radius: 14px; }
 
+/* ---------- Buổi / chú thích ---------- */
+.session-toggle .chip { padding: 3px 12px; }
+.legend { font-size: .76rem; color: var(--text-muted); margin: 8px 2px 0; }
+.card-title-row .session-toggle { margin-left: auto; }
+
+/* ---------- Gán tên giáo viên ---------- */
+.alias-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px dashed var(--border); }
+@media (max-width: 575.98px) { .alias-row { grid-template-columns: 1fr; } }
+
 /* ---------- Quản trị ---------- */
 .admin-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
 

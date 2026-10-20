@@ -24,12 +24,22 @@ export const DEFAULT_PERIODS = [
   { period: 3, start: '08:55', end: '09:40' },
   { period: 4, start: '09:45', end: '10:30' },
   { period: 5, start: '10:35', end: '11:20' },
-  { period: 6, start: '13:30', end: '14:15' },
-  { period: 7, start: '14:20', end: '15:05' },
-  { period: 8, start: '15:25', end: '16:10' },
-  { period: 9, start: '16:15', end: '17:00' },
-  { period: 10, start: '17:05', end: '17:50' },
+  { period: 6, start: '14:00', end: '14:45' },
+  { period: 7, start: '14:50', end: '15:35' },
+  { period: 8, start: '15:55', end: '16:40' },
+  { period: 9, start: '16:45', end: '17:30' },
+  { period: 10, start: '17:35', end: '18:20' },
 ];
+/** Tiết đầu tiên của buổi chiều (dòng thứ nhất của mỗi khối ngày trong file TKB chiều = tiết 6) */
+export const AFTERNOON_FIRST = 6;
+/** Ký hiệu loại tiết buổi chiều (giữ nguyên ký hiệu của nhà trường) */
+export const KIND_SHORT = { CK: 'CK', HSGCT: 'HSG-CT', HSGQG: 'HSG-QG', TC: 'Tự chọn' };
+/** Khoảng tiết cần hiển thị theo buổi: all | am | pm */
+export function periodRange(session, maxPeriod) {
+  if (session === 'am') return [1, Math.min(5, maxPeriod)];
+  if (session === 'pm' && maxPeriod >= AFTERNOON_FIRST) return [AFTERNOON_FIRST, maxPeriod];
+  return [1, maxPeriod];
+}
 /** Mảng PERIODS được sửa "tại chỗ" để mọi module luôn thấy giá trị mới nhất */
 export const PERIODS = DEFAULT_PERIODS.map((p) => ({ ...p }));
 export function setPeriods(list) {
@@ -95,7 +105,8 @@ const SUBJECT_ALIASES = {
   tin: 'TIN', tinhoc: 'TIN', dia: 'DIA', dialy: 'DIA', gdtc: 'GDTC', gdthechat: 'GDTC', thechat: 'GDTC', theduc: 'GDTC',
   gdqp: 'GDQP', gdqpan: 'GDQP', quocphong: 'GDQP', gdktpl: 'GDKTPL', ktpl: 'GDKTPL', gdcd: 'GDKTPL',
   cn: 'CN', congnghe: 'CN', gddp: 'GDDP', gddiaphuong: 'GDDP', diaphuong: 'GDDP',
-  hdtn: 'HDTN', hdtnhn: 'HDTN', hdtnhuongnghiep: 'HDTN', nn2: 'NN2', tiengtrung: 'NN2', ngoaingu2: 'NN2', ai: 'AI',
+  hdtn: 'HDTN', hdtnhn: 'HDTN', hdtnhuongnghiep: 'HDTN', hdtntn: 'HDTN', nn2: 'NN2', tiengtrung: 'NN2', trung: 'NN2', ngoaingu2: 'NN2', ai: 'AI',
+  vatli: 'LY', diali: 'DIA', ta: 'NN', tanh: 'NN', anh: 'NN', tinh: 'TIN',
 };
 const EVENT_KEYS = ['hoatdongtrainghiem', 'chaoco', 'sinhhoatlop', 'shdc', 'shl'];
 
@@ -227,10 +238,11 @@ export function createCombobox(host, { items = [], placeholder = 'Tìm kiếm…
  * cellFn(day, period) → HTML nội dung ô (chuỗi rỗng nếu trống).
  * Ô đúng thứ + tiết hiện tại được gắn class "now".
  */
-export function buildGridTable(maxPeriod, cellFn, { id = '', showTime = true, highlightNow = true } = {}) {
+export function buildGridTable(maxPeriod, cellFn, { id = '', showTime = true, highlightNow = true, range = null } = {}) {
   const now = periodInfo(new Date(), maxPeriod);
   const rows = [];
-  for (let p = 1; p <= maxPeriod; p++) {
+  const [p0, p1] = range || [1, maxPeriod];
+  for (let p = p0; p <= p1; p++) {
     const per = PERIODS.find((x) => x.period === p);
     const tds = DAYS.map((d) => {
       const html = cellFn(d.n, p) || '';
@@ -248,3 +260,16 @@ export function buildGridTable(maxPeriod, cellFn, { id = '', showTime = true, hi
 /** Chip môn học có màu (dùng biến CSS --c) */
 export const subjectChip = (code, text) =>
   `<span class="subj-chip" style="--c:${subjectColor(code)}">${escapeHtml(text ?? subjectName(code))}</span>`;
+
+/** Nút chuyển buổi Cả ngày / Sáng / Chiều (chỉ hiện khi dữ liệu có buổi chiều) */
+export function sessionToggle(current, maxPeriod) {
+  if (maxPeriod < AFTERNOON_FIRST) return '';
+  const b = (v, label) => `<button type="button" class="chip ${current === v ? 'active' : ''}" data-session="${v}">${label}</button>`;
+  return `<div class="chips session-toggle no-export">${b('all', 'Cả ngày')}${b('am', 'Sáng')}${b('pm', 'Chiều')}</div>`;
+}
+/** Gắn sự kiện cho nút chuyển buổi */
+export function wireSessionToggle(host, ctx) {
+  host.querySelectorAll('[data-session]').forEach((b) => {
+    b.onclick = () => { ctx.state.session = b.dataset.session; ctx.rerender(); };
+  });
+}

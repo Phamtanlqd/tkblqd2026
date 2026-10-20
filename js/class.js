@@ -3,6 +3,7 @@
  * ===================================================================== */
 import {
   DAYS, escapeHtml, createCombobox, buildGridTable, subjectChip, subjectColor,
+  sessionToggle, wireSessionToggle, periodRange,
 } from './utils.js';
 import { wireExportBar, exportHeader, shareUrl } from './export.js';
 import { todayCard, emptyState } from './teacher.js';
@@ -14,7 +15,7 @@ function classCell(rs, home) {
     ? `<div class="lesson event" style="--c:${subjectColor('EVENT')}"><span>${escapeHtml(r.eventText)}</span></div>`
     : `<div class="lesson ${rs.length > 1 ? 'clash' : ''}" style="--c:${subjectColor(r.subjectCode)}">
         <b>${escapeHtml(r.subject || '(chưa rõ môn)')}</b>
-        <span>${r.teacher ? escapeHtml(r.teacher) : '<i class="text-danger">Chưa có GV</i>'}</span>
+        <span>${r.teacher ? escapeHtml(r.teacher) : r.teacherShort ? `${escapeHtml(r.teacherShort)} <i class="text-warning" title="Chưa khớp được họ tên đầy đủ">(?)</i>` : '<i class="text-danger">Chưa có GV</i>'}</span>
         ${r.room && r.room !== home ? `<small><i class="bi bi-door-open"></i> ${escapeHtml(r.room)}</small>` : ''}</div>`).join('');
 }
 
@@ -23,6 +24,8 @@ export function renderClass(host, ds, ctx, param) {
   let name = param ? decodeURIComponent(param) : ctx.state.selClass;
   if (!ds.classes.some((c) => c.name === name)) name = ds.classes[0].name;
   ctx.state.selClass = name;
+  const session = ctx.state.session || 'all';
+  const range = periodRange(session, ds.maxPeriod);
   const idx = ds.classes.findIndex((c) => c.name === name);
   const cls = ds.classes[idx];
   const all = ds.byClass.get(name) || [];
@@ -64,6 +67,7 @@ export function renderClass(host, ds, ctx, param) {
       <div class="col-xl-9">
         <div class="glass card-pad">
           <div class="card-title-row"><h6><i class="bi bi-table"></i> Thời khóa biểu tuần</h6>
+            ${sessionToggle(session, ds.maxPeriod)}
             <div class="export-bar no-export">
               <button class="btn btn-sm btn-light" data-export="print"><i class="bi bi-printer"></i> In</button>
               <button class="btn btn-sm btn-light" data-export="pdf"><i class="bi bi-file-earmark-pdf"></i> PDF</button>
@@ -73,7 +77,8 @@ export function renderClass(host, ds, ctx, param) {
             </div></div>
           <div id="cExport">
             ${exportHeader(ds.school, `Thời khóa biểu lớp ${cls.name}`, `${recs.length} tiết/tuần${ds.meta.week ? ` · Tuần ${ds.meta.week}` : ''}`)}
-            ${buildGridTable(ds.maxPeriod, (d, p) => classCell(slot.get(`${d}|${p}`), home), { id: 'cTable' })}
+            ${buildGridTable(ds.maxPeriod, (d, p) => classCell(slot.get(`${d}|${p}`), home), { id: 'cTable', range })}
+            ${ds.hasAfternoon && session !== 'am' ? '<p class="legend no-export">CK, HSG-CT, HSG-QG, Tự chọn: ký hiệu theo thời khóa biểu buổi chiều của trường.</p>' : ''}
           </div>
         </div>
       </div>
@@ -89,13 +94,14 @@ export function renderClass(host, ds, ctx, param) {
   host.querySelector('#prevC').onclick = () => go(-1);
   host.querySelector('#nextC').onclick = () => go(1);
 
+  wireSessionToggle(host, ctx);
   wireExportBar(host, {
     getEl: () => host.querySelector('#cExport'),
     getName: () => `tkb-lop-${cls.name}`,
     getAOA: () => [
       [`Thời khóa biểu lớp ${cls.name}`], [],
       ['Tiết', ...DAYS.map((d) => d.name)],
-      ...Array.from({ length: ds.maxPeriod }, (_, i) => [`Tiết ${i + 1}`, ...DAYS.map((d) => (slot.get(`${d.n}|${i + 1}`) || [])
+      ...Array.from({ length: range[1] - range[0] + 1 }, (_, k) => k + range[0] - 1).map((i) => [`Tiết ${i + 1}`, ...DAYS.map((d) => (slot.get(`${d.n}|${i + 1}`) || [])
         .map((r) => r.event ? r.eventText : [r.subject, r.teacher, r.room].filter(Boolean).join('\n')).join('\n---\n'))]),
     ],
     getQR: () => ({

@@ -1,7 +1,7 @@
 /* =====================================================================
  * validator.js – Kiểm tra xung đột / thiếu dữ liệu và trang "Kiểm Tra Lỗi"
  * ===================================================================== */
-import { escapeHtml, dayName, DAYS, subjectName, toast } from './utils.js';
+import { escapeHtml, dayName, DAYS, subjectName, toast, AFTERNOON_FIRST } from './utils.js';
 import { exportExcelAOA } from './export.js';
 
 export const ISSUE_TYPES = {
@@ -15,6 +15,8 @@ export const ISSUE_TYPES = {
   'unknown-class': { label: 'Lớp không có trong TKB lớp', sev: 'warning', icon: 'bi-question-circle' },
   'gap': { label: 'Tiết trống giữa buổi', sev: 'info', icon: 'bi-hourglass-split' },
   'no-lessons': { label: 'Giáo viên chưa có tiết', sev: 'info', icon: 'bi-person' },
+  'teacher-unresolved': { label: 'Chưa khớp giáo viên (buổi chiều)', sev: 'warning', icon: 'bi-person-question' },
+  'teacher-weak': { label: 'Khớp tên nhưng khác môn (buổi chiều)', sev: 'info', icon: 'bi-person-exclamation' },
   'parse': { label: 'Ô không nhận dạng', sev: 'info', icon: 'bi-exclamation-diamond' },
 };
 const slotText = (d, p) => `${dayName(d)} · Tiết ${p}`;
@@ -47,7 +49,7 @@ export function validate(ds) {
   }
   // 4. Thiếu giáo viên / thiếu môn
   for (const r of real) {
-    if (!r.teacher && ds.hasTeacherFile) add('missing-teacher', `Lớp ${r.class} học ${r.subject || '(chưa rõ môn)'} nhưng chưa có giáo viên (${slotText(r.day, r.period)})`, { class: r.class, day: r.day, period: r.period });
+    if (!r.teacher && !r.teacherShort && ds.hasTeacherFile) add('missing-teacher', `Lớp ${r.class} học ${r.subject || '(chưa rõ môn)'} nhưng chưa có giáo viên (${slotText(r.day, r.period)})`, { class: r.class, day: r.day, period: r.period });
     if (!r.subjectCode) add('missing-subject', `${r.teacher ? 'GV ' + r.teacher + ' – ' : ''}lớp ${r.class} chưa ghi môn (${slotText(r.day, r.period)})`, { teacher: r.teacher, class: r.class, day: r.day, period: r.period });
     if (ds.hasClassFile && ds.hasTeacherFile && r.fromTeacherFile && !r.inClassFile) add('class-slot-missing', `${r.teacher} dạy lớp ${r.class} nhưng TKB lớp để trống (${slotText(r.day, r.period)})`, { teacher: r.teacher, class: r.class, day: r.day, period: r.period });
     if (r.classSubjectCode && r.subjectCode && r.classSubjectCode !== r.subjectCode) add('subject-mismatch', `Lớp ${r.class}: TKB lớp ghi ${subjectName(r.classSubjectCode)}, TKB giáo viên (${r.teacher}) ghi ${subjectName(r.subjectCode)} (${slotText(r.day, r.period)})`, { teacher: r.teacher, class: r.class, day: r.day, period: r.period });
@@ -58,11 +60,11 @@ export function validate(ds) {
     const seen = new Set();
     for (const r of real) if (r.fromTeacherFile && !inClass.has(r.class) && !seen.has(r.class)) { seen.add(r.class); add('unknown-class', `Lớp ${r.class} xuất hiện trong TKB giáo viên nhưng không có trong TKB lớp`, { class: r.class }); }
   }
-  // 6. Tiết trống giữa buổi của lớp
+  // 6. Tiết trống giữa buổi sáng của lớp (buổi chiều bố trí theo khối dòng nên không xét)
   for (const cls of ds.classes) {
     const recs = ds.byClass.get(cls.name) || [];
     for (const d of DAYS) {
-      const ps = new Set(recs.filter((r) => r.day === d.n).map((r) => r.period));
+      const ps = new Set(recs.filter((r) => r.day === d.n && r.period < AFTERNOON_FIRST).map((r) => r.period));
       if (!ps.size) continue;
       const last = Math.max(...ps);
       for (let p = Math.min(...ps); p < last; p++) if (!ps.has(p)) add('gap', `Lớp ${cls.name} trống ${slotText(d.n, p)} nhưng có tiết sau đó`, { class: cls.name, day: d.n, period: p });
@@ -70,7 +72,14 @@ export function validate(ds) {
   }
   // 7. Giáo viên chưa có tiết
   if (ds.hasTeacherFile) for (const t of ds.teachers) if (!t.total) add('no-lessons', `${t.name} chưa có tiết nào trong tuần`, { teacher: t.name });
-  // 8. Lỗi đọc file
+  // 8. Buổi chiều: tên giáo viên viết tắt chưa khớp được / khớp nhưng khác môn
+  for (const g of ds.unresolved || []) {
+    add('teacher-unresolved', `"${g.short}" (${subjectName(g.subjectCode) || 'chưa rõ môn'}${g.kind ? ' · ' + g.kind : ''}) – ${g.slots} tiết, lớp ${g.classes.join(', ')}. ${g.candidates?.length ? 'Có thể là: ' + g.candidates.join(' / ') : 'Không có giáo viên nào trùng tên'} → gán trong Cài Đặt.`, { class: g.classes[0] });
+  }
+  for (const w of ds.weakMatches || []) {
+    add('teacher-weak', `"${w.short}" được khớp với ${w.teacher} nhưng giáo viên này chưa dạy ${subjectName(w.subjectCode)} ở buổi sáng – lớp ${w.cls} (${slotText(w.day, w.period)})`, { teacher: w.teacher, class: w.cls, day: w.day, period: w.period });
+  }
+  // 9. Lỗi đọc file
   for (const p of ds.parseIssues || []) add('parse', p.msg);
 
   const order = { danger: 0, warning: 1, info: 2 };
