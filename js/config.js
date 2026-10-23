@@ -9,7 +9,7 @@
  * chống thao tác nhầm, không thay thế bảo mật máy chủ.
  * ===================================================================== */
 export const CONFIG = {
-  ADMIN_HASH: '946395d4e7492f8218d67b9f037e5bdb76f75d312a3771809527997d4f476155',
+  ADMIN_HASH: 'e40d1bfcd31b3033ca8fecaf348635414fc497652f172ac6ade3eee7925b539b',
   SESSION_MINUTES: 60,   // đăng nhập quản trị hết hạn sau số phút này
   MAX_FAILS: 5,          // sai quá số lần này sẽ bị khóa tạm thời
   LOCK_SECONDS: 60,
