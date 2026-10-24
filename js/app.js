@@ -13,6 +13,8 @@ import { renderRooms } from './room.js';
 import { renderCheck, validate } from './validator.js';
 import { renderSettings } from './settings.js';
 import { initGlobalSearch, renderSubject } from './search.js';
+import { renderHistory, saveWeek, getWeek, listWeeks, weekIdentity, groupByWeek } from './history.js';
+import { fetchIndex, fetchWeek, pickCurrent } from './publish.js';
 import { isAdmin, login, logout, authEnabled, sessionLeftMinutes } from './auth.js';
 
 const LS = { sources: 'stt2.sources', theme: 'stt2.theme', settings: 'stt2.settings', periods: 'stt2.periods' };
@@ -28,7 +30,7 @@ const ctx = {
   canInstall: () => !!deferredInstall,
   install, pickFiles, importFiles, reloadSample, clearData, setTheme, savePeriods, saveSettings,
   isAdmin, authEnabled, sessionLeftMinutes, doLogin, doLogout,
-  rerender: () => route(true),
+  rerender: () => route(true), loadWeek, viewPublished,
 };
 
 const VIEWS = {
@@ -39,6 +41,7 @@ const VIEWS = {
   rooms: renderRooms,
   check: renderCheck,
   settings: renderSettings,
+  history: renderHistory,
   subject: renderSubject,
 };
 const NEEDS_DATA = new Set(['dashboard', 'teacher', 'class', 'stats', 'rooms', 'check', 'subject']);
@@ -82,8 +85,18 @@ async function doLogout() {
   rebuild(); route(); toast('Đã đăng xuất quản trị', 'primary');
 }
 /** Nạp dữ liệu đã công bố (assets/data). Trả về true nếu thành công */
-async function loadPublished() {
-  try { const s = await loadSampleSources(window.XLSX); ctx.sources = { teacher: s.teacher, class: s.class, afternoon: s.afternoon }; return true; }
+async function loadPublished(key) {
+  try {                                            // nhiều tuần: assets/data/weeks/index.json
+    const idx = await fetchIndex();
+    if (idx) {
+      ctx.published = idx;
+      const w = (key && idx.weeks.find((x) => x.key === key)) || pickCurrent(idx.weeks);
+      const j = await fetchWeek(w);
+      ctx.sources = { teacher: j.sources.teacher || null, class: j.sources.class || null, afternoon: j.sources.afternoon || null };
+      ctx.currentKey = w.key; return true;
+    }
+  } catch (e) { console.warn('Không đọc được danh mục tuần:', e); }
+  try { const s = await loadSampleSources(window.XLSX); ctx.sources = { teacher: s.teacher, class: s.class, afternoon: s.afternoon }; ctx.currentKey = ''; return true; }   // tương thích V2: 3 file đơn
   catch { return false; }
 }
 
@@ -96,7 +109,32 @@ function rebuild() {
   const b = $('#chkBadge');
   b.textContent = ctx.state.issueCount; b.hidden = !ctx.state.issueCount;
   updateHeader();
+  refreshWeekPicker();
 }
+/** Ô chọn tuần ở đầu trang: các tuần đã công bố + tuần chỉ có trên máy này */
+async function refreshWeekPicker() {
+  const sel = $('#weekPick'); if (!sel) return;
+  const local = await listWeeks().catch(() => []);
+  const m = new Map((ctx.published?.weeks || []).map((w) => [w.key, { ...w, tag: '' }]));
+  local.forEach((w) => { if (!m.has(w.key)) m.set(w.key, { ...w, tag: ' (máy này)' }); });
+  const list = [...m.values()].sort((a, b) => b.key.localeCompare(a.key));
+  const cur = ctx.currentKey || weekIdentity(ds.meta)?.key;
+  sel.hidden = list.length < 2;
+  sel.innerHTML = list.map((w) => `<option value="${w.key}" ${w.key === cur ? 'selected' : ''}>Tuần ${w.week} · HK${w.semester} · ${w.year}${w.tag}</option>`).join('');
+}
+/** Mở một tuần để xem: quản trị ưu tiên bản trên máy, người xem ưu tiên bản đã công bố */
+async function loadWeek(key) {
+  setBusy(true, 'Đang mở tuần…');
+  try {
+    const local = await getWeek(key), pub = ctx.published?.weeks.find((x) => x.key === key);
+    const src = (local && (isAdmin() || !pub)) ? local.sources : pub ? (await fetchWeek(pub)).sources : local?.sources;
+    if (!src) return toast('Không tìm thấy tuần này', 'danger');
+    ctx.sources = { teacher: src.teacher || null, class: src.class || null, afternoon: src.afternoon || null };
+    ctx.currentKey = key; rebuild(); route();
+  } catch (e) { toast('Không mở được tuần: ' + e.message, 'danger', 5000); }
+  finally { setBusy(false); }
+}
+async function viewPublished() { await loadPublished(); rebuild(); location.hash = '#/dashboard'; route(); toast('Đã quay về tuần hiện hành', 'primary'); }
 function persist() {
   if (!lsSet(LS.sources, ctx.sources)) toast('Không lưu được dữ liệu vào thiết bị (bộ nhớ đầy)', 'warning');
 }
@@ -111,15 +149,28 @@ async function importFiles(files) {
   setBusy(true, 'Đang đọc & nhận dạng file…');
   const t0 = performance.now();
   try {
-    let got = 0;
+    const parsed = [];
     for (const f of list) {
       const r = await parseFile(window.XLSX, f);
-      if (r.teacher) { ctx.sources.teacher = r.teacher; got++; toast(`${f.name}: nhận dạng TKB giáo viên (${r.teacher.records.length} tiết, ${r.teacher.teachers.length} GV)`, 'success', 4200); }
-      if (r.class) { ctx.sources.class = r.class; got++; toast(`${f.name}: nhận dạng TKB lớp (${r.class.classes.length} lớp)`, 'success', 4200); }
-      if (r.afternoon) { ctx.sources.afternoon = r.afternoon; got++; toast(`${f.name}: nhận dạng TKB buổi chiều (${r.afternoon.records.length} ô, ${r.afternoon.classes.length} lớp)`, 'success', 4200); }
-      if (!r.teacher && !r.class && !r.afternoon) toast(`${f.name}: không nhận dạng được cấu trúc TKB`, 'danger', 5000);
+      if (!r.teacher && !r.class && !r.afternoon) { toast(`${f.name}: không nhận dạng được cấu trúc TKB`, 'danger', 5000); continue; }
+      parsed.push({ name: f.name, r });
     }
-    if (got) { persist(); rebuild(); route(); toast(`Hoàn tất trong ${Math.round(performance.now() - t0)} ms`, 'primary', 2200); }
+    if (!parsed.length) return;
+    const { groups, loose } = groupByWeek(parsed);        // nhiều tuần trong một lần nạp → tách theo từng tuần
+    if (!groups.size) return toast('Không đọc được số tuần từ tiêu đề file (cần có dòng “Tuần …”).', 'danger', 6000);
+    const saved = [];
+    for (const g of groups.values()) {
+      const old = await getWeek(g.id.key);                  // nạp bổ sung (ví dụ chỉ file chiều): giữ phần đã có của tuần đó
+      const src = { teacher: null, class: null, afternoon: null, ...(old?.sources || {}), ...g.sources };
+      await saveWeek(src, buildDataset(src, {}).meta, { id: g.id });
+      saved.push({ id: g.id, src, files: g.files });
+    }
+    saved.sort((a, b) => a.id.key.localeCompare(b.id.key));
+    const show = saved[saved.length - 1];                   // hiển thị tuần mới nhất vừa nạp
+    ctx.sources = { teacher: show.src.teacher, class: show.src.class, afternoon: show.src.afternoon }; ctx.currentKey = show.id.key;
+    persist(); rebuild(); route();
+    toast(`Đã nạp ${saved.length} tuần: ${saved.map((x) => x.id.week).join(', ')}` + (loose.length ? ` · ${loose.length} phần chưa xác định được tuần` : ''), 'success', 5000);
+    toast(`Hoàn tất trong ${Math.round(performance.now() - t0)} ms. Vào “Lịch Sử & So Sánh” để công bố.`, 'primary', 4500);
   } catch (e) {
     console.error(e); toast('Lỗi đọc file: ' + e.message, 'danger', 5000);
   } finally { setBusy(false); }
@@ -252,6 +303,7 @@ async function init() {
 
   // Sự kiện giao diện
   $('#btnTheme').onclick = () => setTheme(ctx.theme === 'dark' ? 'light' : 'dark');
+  $('#weekPick').onchange = (e) => loadWeek(e.target.value);
   $('#btnMenu').onclick = openSidebar;
   $('#backdrop').onclick = closeSidebar;
   $('#btnImport').onclick = () => { if (isAdmin()) pickFiles(); else location.hash = '#/settings'; };

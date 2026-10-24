@@ -3,7 +3,7 @@
  * Smart Timetable V2
  * ===================================================================== */
 
-export const APP_VERSION = '2.0.0';
+export const APP_VERSION = '3.1.0';
 export const DEFAULT_SCHOOL = 'THPT Chuyên Lê Quý Đôn';
 
 /* ---------- Các thứ trong tuần (n = số thứ: 2..7) ---------- */

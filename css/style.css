@@ -343,3 +343,5 @@ body {
   #printRoot .table-wrap { overflow: visible; }
   .tt-table tr { break-inside: avoid; }
 }
+
+#weekPick{width:auto;max-width:240px;border-radius:999px;font-weight:600}

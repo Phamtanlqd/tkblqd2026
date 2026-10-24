@@ -24,7 +24,7 @@
   <aside id="sidebar" class="sidebar">
     <a class="brand" href="#/dashboard">
       <img src="assets/icons/logo.svg" alt="Logo" width="38" height="38">
-      <div><b>Smart Timetable</b><small>Phiên bản 2.0</small></div>
+      <div><b>Smart Timetable</b><small>Phiên bản 3.0</small></div>
     </a>
     <nav class="nav flex-column" aria-label="Menu chính">
       <a class="nav-link" data-view="dashboard" href="#/dashboard"><i class="bi bi-speedometer2"></i> Dashboard</a>
@@ -32,6 +32,7 @@
       <a class="nav-link" data-view="class" href="#/class"><i class="bi bi-people"></i> TKB Lớp</a>
       <a class="nav-link" data-view="stats" href="#/stats"><i class="bi bi-bar-chart-line"></i> Thống Kê</a>
       <a class="nav-link" data-view="rooms" href="#/rooms"><i class="bi bi-door-open"></i> Phòng Học</a>
+      <a class="nav-link" data-view="history" href="#/history"><i class="bi bi-clock-history"></i> Lịch Sử &amp; So Sánh</a>
       <a class="nav-link" data-view="check" href="#/check"><i class="bi bi-shield-check"></i> Kiểm Tra Lỗi <span id="chkBadge" class="badge rounded-pill text-bg-danger ms-auto" hidden>0</span></a>
       <a class="nav-link" data-view="settings" href="#/settings"><i class="bi bi-gear"></i> Cài Đặt</a>
     </nav>
@@ -64,6 +65,7 @@
       <div class="topbar-info">
         <span class="info-chip"><i class="bi bi-calendar-event"></i> <b id="hdDay">—</b> · <span id="hdDate">—</span></span>
         <span class="info-chip" id="hdWeek">—</span>
+        <select class="form-select form-select-sm" id="weekPick" aria-label="Chọn tuần xem" hidden></select>
         <span class="info-chip period-chip" id="hdPeriodBox"><i class="bi bi-bell"></i> <b id="hdPeriod">—</b> <small id="hdPeriodSub"></small></span>
         <span class="info-chip clock"><i class="bi bi-clock"></i> <b id="hdClock">00:00:00</b></span>
       </div>
