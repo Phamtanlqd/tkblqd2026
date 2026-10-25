@@ -259,6 +259,7 @@ export function parseAfternoonCell(text) {
   const subjectRaw = words.map((w) => w.replace(/\d+/g, '')).filter(Boolean).join(' ');
   const { name, hint } = splitTeacherHint(teacherRaw);
   const subj = subjectRaw ? parseSubject(subjectRaw) : { code: '' };
+  if (subj.event && !teacherRaw) return { event: true, text: subj.name };
   return { kind, grade: gradeM ? +gradeM[0] : 0, subjectCode: subj.code, subjectRaw, teacherShort: name, hint };
 }
 
@@ -452,8 +453,14 @@ export async function loadSampleSources(XLSX) {
 const push = (map, key, val) => { const a = map.get(key); a ? a.push(val) : map.set(key, [val]); };
 
 export function buildDataset(sources, settings = {}) {
-  const T = sources?.teacher?.records || [];
-  const C = sources?.class?.records || [];
+  // Dữ liệu tuần đã lưu trước đây có thể mang mã môn "X_KTCN"/"X_HSTUON": quy về hoạt động chung (không cần giáo viên)
+  const fixed = (r) => {
+    if (!/^X_(KT|HSTU)/.test(r.subjectCode || '')) return r;
+    const sj = parseSubject(r.subjectCode.slice(2));
+    return sj.event ? { ...r, subjectCode: 'EVENT', event: true, eventText: sj.name } : r;
+  };
+  const T = (sources?.teacher?.records || []).map(fixed);
+  const C = (sources?.class?.records || []).map(fixed);
   const subjectRooms = settings.subjectRooms || {};
   const useClassRoom = settings.useClassRoom !== false;
 

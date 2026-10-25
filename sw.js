@@ -4,7 +4,7 @@
  *  - Mã nguồn / HTML: network-first (luôn lấy bản mới khi có mạng), rơi về cache khi offline
  * Đổi CACHE_VERSION mỗi lần phát hành để làm mới cache.
  * ===================================================================== */
-const CACHE_VERSION = 'smart-tkb-v3.1.0';
+const CACHE_VERSION = 'smart-tkb-v3.1.1';
 const PRECACHE = [
   './', 'index.html', 'manifest.json', 'css/style.css',
   'js/app.js', 'js/utils.js', 'js/data-loader.js', 'js/dashboard.js', 'js/teacher.js', 'js/class.js',

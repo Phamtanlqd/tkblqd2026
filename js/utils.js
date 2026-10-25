@@ -3,7 +3,7 @@
  * Smart Timetable V2
  * ===================================================================== */
 
-export const APP_VERSION = '3.1.0';
+export const APP_VERSION = '3.1.1';
 export const DEFAULT_SCHOOL = 'THPT Chuyên Lê Quý Đôn';
 
 /* ---------- Các thứ trong tuần (n = số thứ: 2..7) ---------- */
@@ -121,6 +121,13 @@ export function parseSubject(raw) {
   if (!text) return { code: '', name: '', event: false };
   const key = subjectKey(text);
   if (SUBJECT_ALIASES[key]) return { code: SUBJECT_ALIASES[key], name: SUBJECTS[SUBJECT_ALIASES[key]].name, event: false };
+  // Tiết kiểm tra ("KTCN", "KT Văn", "Kiểm tra Toán") và học sinh tự ôn ("HSTUON") không có giáo viên → coi là hoạt động chung
+  const exam = key.match(/^(?:kiemtra|kt)(.+)$/);
+  if (exam) {
+    const base = SUBJECT_ALIASES[exam[1]];
+    return { code: 'EVENT', name: 'Kiểm tra ' + (base ? SUBJECTS[base].name : sentenceCase(text.replace(/^(kiểm tra|kiem tra|kt)\s*/i, ''))), event: true };
+  }
+  if (/^hstu/.test(key)) return { code: 'EVENT', name: key === 'hstuon' ? 'HS tự ôn' : sentenceCase(text), event: true };
   if (text.length >= 20 || EVENT_KEYS.includes(key)) return { code: 'EVENT', name: sentenceCase(text), event: true };
   return { code: 'X_' + key.toUpperCase(), name: text, event: false };
 }
