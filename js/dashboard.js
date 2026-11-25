@@ -50,6 +50,59 @@ function stats(ds) {
 
 /* ---------- Thống kê GV trống tiết theo môn & tiết (phục vụ dạy thay) ---------- */
 /**
+ * Xác định danh sách GV đúng chuyên môn của từng môn học (tránh nhầm lẫn GV trùng tên / khác môn chính).
+ * Ưu tiên:
+ *  1. GV có môn chính (ds.teachers[i].subjectCode) trùng với mã môn s.code.
+ *  2. Nếu môn chưa có ai khớp môn chính, lấy từ s.teachers nhưng loại bỏ GV có môn chính khác rõ ràng.
+ */
+function getStrictTeachersBySubject(ds) {
+  const teacherInfoByName = new Map();
+  for (const t of ds.teachers || []) {
+    teacherInfoByName.set(t.name, t);
+  }
+
+  // Đếm số tiết thực tế của từng GV theo từng môn (chỉ tính các tiết không phải event)
+  const subjectCountsByTeacher = new Map();
+  for (const r of ds.records || []) {
+    if (r.event || !r.teacher || !r.subjectCode) continue;
+    if (!subjectCountsByTeacher.has(r.teacher)) subjectCountsByTeacher.set(r.teacher, new Map());
+    const m = subjectCountsByTeacher.get(r.teacher);
+    m.set(r.subjectCode, (m.get(r.subjectCode) || 0) + 1);
+  }
+
+  const getPrimarySubjectCode = (tName) => {
+    const tObj = teacherInfoByName.get(tName);
+    if (tObj?.subjectCode) return tObj.subjectCode;
+    const cntMap = subjectCountsByTeacher.get(tName);
+    if (!cntMap || !cntMap.size) return '';
+    return [...cntMap.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  };
+
+  return (ds.subjects || []).map((s) => {
+    const primaryMatches = new Set();
+    for (const t of ds.teachers || []) {
+      if (t.subjectCode === s.code) primaryMatches.add(t.name);
+    }
+
+    let finalNames = [...primaryMatches];
+    if (!finalNames.length) {
+      // Dự phòng nếu ds.teachers không có subjectCode: chỉ lấy GV không thuộc môn chính khác
+      finalNames = (s.teachers || []).filter((tName) => {
+        const pCode = getPrimarySubjectCode(tName);
+        return !pCode || pCode === s.code;
+      });
+    }
+
+    finalNames.sort((a, b) => a.localeCompare(b, 'vi'));
+    return {
+      code: s.code,
+      name: s.name || subjectName(s.code),
+      teachers: finalNames,
+    };
+  });
+}
+
+/**
  * Trả về danh sách GV cùng môn đang rảnh tại (ngày d, tiết p) hoặc tổng hợp theo khoảng ngày/tiết.
  * @param {Object} ds - Dataset từ buildDataset()
  * @param {Object} filter - { subjectCode: 'ALL'|string, day: 'ALL'|number, session: 'all'|'am'|'pm' }
@@ -68,10 +121,8 @@ export function computeFreeTeachersBySubjectAndPeriod(ds, filter = {}) {
     return session === 'all' || ses === session;
   });
 
-  // Lưu lịch dạy của từng GV theo "day|period" -> mảng tiết (để biết GV đó đang dạy lớp/môn nào nếu cần)
+  // Lưu lịch dạy của từng GV theo "day|period"
   const busySlotsByTeacher = new Map();
-  const inferredTeachersBySubj = new Map();
-
   for (const r of ds.records || []) {
     if (r.event || !r.teacher) continue;
     if (!busySlotsByTeacher.has(r.teacher)) busySlotsByTeacher.set(r.teacher, new Map());
@@ -79,26 +130,10 @@ export function computeFreeTeachersBySubjectAndPeriod(ds, filter = {}) {
     const k = `${r.day}|${r.period}`;
     if (!tMap.has(k)) tMap.set(k, []);
     tMap.get(k).push(r);
-
-    if (r.subjectCode) {
-      if (!inferredTeachersBySubj.has(r.subjectCode)) inferredTeachersBySubj.set(r.subjectCode, new Set());
-      inferredTeachersBySubj.get(r.subjectCode).add(r.teacher);
-    }
   }
 
-  // Thông tin số tiết/tuần của từng GV để sắp xếp ưu tiên GV ít tiết hoặc cùng môn
   const teacherMeta = new Map((ds.teachers || []).map((t) => [t.name, t]));
-
-  const subjList = (ds.subjects || []).map((s) => {
-    const tSet = new Set(s.teachers || []);
-    const inf = inferredTeachersBySubj.get(s.code);
-    if (inf) inf.forEach((name) => tSet.add(name));
-    return {
-      code: s.code,
-      name: s.name || subjectName(s.code),
-      teachers: [...tSet].sort((a, b) => a.localeCompare(b, 'vi')),
-    };
-  });
+  const subjList = getStrictTeachersBySubject(ds);
 
   const filteredSubjects =
     subjectCode === 'ALL' ? subjList : subjList.filter((s) => s.code === subjectCode);
@@ -112,7 +147,6 @@ export function computeFreeTeachersBySubjectAndPeriod(ds, filter = {}) {
     let rowSum = 0;
 
     for (const p of visiblePeriods) {
-      // Danh sách GV trống tiết tại (d, p)
       const freeByDay = [];
       const freeAllNames = new Set();
 
@@ -276,7 +310,7 @@ function renderFreeSlotSection(ds, state, selectedDetail = null) {
     : `<tr><td colspan="${data.periods.length + 3}" class="text-center text-muted py-3">Không có dữ liệu phù hợp bộ lọc.</td></tr>`;
 
   const scopeHint = data.isSingleDay
-    ? `Hiển thị <b>số GV cùng môn đang rảnh</b> trong <b>${escapeHtml(dayName(Number(state.day)))}</b> — bấm vào từng ô để xem danh sách GV có thể dạy thay.`
+    ? `Hiển thị <b>số GV đúng môn đang rảnh</b> trong <b>${escapeHtml(dayName(Number(state.day)))}</b> — bấm vào từng ô để xem danh sách GV có thể dạy thay.`
     : `Hiển thị <b>tổng lượt GV rảnh (GV × ngày)</b> cả tuần — chọn một <b>Thứ</b> cụ thể để xem danh sách GV rảnh từng tiết.`;
 
   return `
@@ -480,7 +514,6 @@ export function renderStats(host, ds, ctx) {
   const busiest = st.teachersSorted.slice(0, 5);
   const avg = st.teachersSorted.length ? (st.teachersSorted.reduce((a, t) => a + t.total, 0) / st.teachersSorted.length).toFixed(1) : 0;
 
-  // Mặc định chọn hôm nay (nếu T2..T7) để tiện xem GV trống tiết dạy thay ngay
   const todayNum = new Date().getDay();
   const defaultDay = todayNum >= 1 && todayNum <= 6 ? String(todayNum + 1) : '2';
 
