@@ -1,11 +1,10 @@
 /* =====================================================================
- * dashboard.js – Dashboard tổng quan và trang Thống Kê (Chart.js)
+ * dashboard.js – Dashboard tổng quan và trang Thống Kê (Chart.js + GV rảnh dạy thay)
  * ===================================================================== */
 import { DAYS, PERIODS, escapeHtml, subjectColor, periodInfo, dayName, subjectName } from './utils.js';
 import { exportChartPNG, safeName } from './export.js';
 
 const charts = new Map();
-const PALETTE = ['#2563EB', '#0EA5E9', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316', '#84CC16', '#6366F1', '#06B6D4'];
 
 export function destroyCharts() {
   for (const c of charts.values()) c.destroy();
@@ -32,7 +31,7 @@ const chartCard = (id, title, h = 300, cls = 'col-lg-6') => `
       <button class="btn btn-sm btn-light no-export" data-chart="${id}" title="Xuất PNG"><i class="bi bi-image"></i> PNG</button></div>
     <div class="chart-box" style="height:${h}px"><canvas id="${id}"></canvas></div></div></div>`;
 
-/* ---------- Tính số liệu ---------- */
+/* ---------- Tính số liệu tổng quan ---------- */
 function stats(ds) {
   const real = ds.records.filter((r) => !r.event);
   const byDay = DAYS.map((d) => real.filter((r) => r.day === d.n));
@@ -47,6 +46,314 @@ function stats(ds) {
     hist: bins.map(([, lo, hi]) => loads.filter((x) => x >= lo && x <= hi).length),
     teachersSorted: [...ds.teachers].filter((t) => t.total > 0).sort((a, b) => b.total - a.total),
   };
+}
+
+/* ---------- Thống kê GV trống tiết theo môn & tiết (phục vụ dạy thay) ---------- */
+/**
+ * Trả về danh sách GV cùng môn đang rảnh tại (ngày d, tiết p) hoặc tổng hợp theo khoảng ngày/tiết.
+ * @param {Object} ds - Dataset từ buildDataset()
+ * @param {Object} filter - { subjectCode: 'ALL'|string, day: 'ALL'|number, session: 'all'|'am'|'pm' }
+ */
+export function computeFreeTeachersBySubjectAndPeriod(ds, filter = {}) {
+  const subjectCode = filter.subjectCode || 'ALL';
+  const isSingleDay = filter.day && filter.day !== 'ALL';
+  const dayFilter = isSingleDay ? Number(filter.day) : null;
+  const session = filter.session || 'all';
+
+  const activeDays = isSingleDay ? DAYS.filter((d) => d.n === dayFilter) : DAYS;
+  const allPeriods = Array.from({ length: ds.maxPeriod }, (_, i) => i + 1);
+  const visiblePeriods = allPeriods.filter((p) => {
+    const info = PERIODS.find((x) => x.period === p);
+    const ses = info?.session || (p >= 6 ? 'pm' : 'am');
+    return session === 'all' || ses === session;
+  });
+
+  // Lưu lịch dạy của từng GV theo "day|period" -> mảng tiết (để biết GV đó đang dạy lớp/môn nào nếu cần)
+  const busySlotsByTeacher = new Map();
+  const inferredTeachersBySubj = new Map();
+
+  for (const r of ds.records || []) {
+    if (r.event || !r.teacher) continue;
+    if (!busySlotsByTeacher.has(r.teacher)) busySlotsByTeacher.set(r.teacher, new Map());
+    const tMap = busySlotsByTeacher.get(r.teacher);
+    const k = `${r.day}|${r.period}`;
+    if (!tMap.has(k)) tMap.set(k, []);
+    tMap.get(k).push(r);
+
+    if (r.subjectCode) {
+      if (!inferredTeachersBySubj.has(r.subjectCode)) inferredTeachersBySubj.set(r.subjectCode, new Set());
+      inferredTeachersBySubj.get(r.subjectCode).add(r.teacher);
+    }
+  }
+
+  // Thông tin số tiết/tuần của từng GV để sắp xếp ưu tiên GV ít tiết hoặc cùng môn
+  const teacherMeta = new Map((ds.teachers || []).map((t) => [t.name, t]));
+
+  const subjList = (ds.subjects || []).map((s) => {
+    const tSet = new Set(s.teachers || []);
+    const inf = inferredTeachersBySubj.get(s.code);
+    if (inf) inf.forEach((name) => tSet.add(name));
+    return {
+      code: s.code,
+      name: s.name || subjectName(s.code),
+      teachers: [...tSet].sort((a, b) => a.localeCompare(b, 'vi')),
+    };
+  });
+
+  const filteredSubjects =
+    subjectCode === 'ALL' ? subjList : subjList.filter((s) => s.code === subjectCode);
+
+  const periodTotals = {};
+  visiblePeriods.forEach((p) => { periodTotals[p] = 0; });
+  let grandTotal = 0;
+
+  const rows = filteredSubjects.map((subj) => {
+    const cells = {};
+    let rowSum = 0;
+
+    for (const p of visiblePeriods) {
+      // Danh sách GV trống tiết tại (d, p)
+      const freeByDay = [];
+      const freeAllNames = new Set();
+
+      for (const d of activeDays) {
+        const freeNamesInDay = subj.teachers.filter((tName) => {
+          const tMap = busySlotsByTeacher.get(tName);
+          return !tMap || !tMap.has(`${d.n}|${p}`);
+        });
+        freeByDay.push({ day: d, teachers: freeNamesInDay });
+        freeNamesInDay.forEach((n) => freeAllNames.add(n));
+      }
+
+      const count = isSingleDay
+        ? (freeByDay[0]?.teachers.length ?? 0)
+        : freeByDay.reduce((acc, item) => acc + item.teachers.length, 0);
+
+      cells[p] = {
+        count,
+        totalTeachers: subj.teachers.length,
+        freeTeachers: [...freeAllNames].map((name) => ({
+          name,
+          weekLoad: teacherMeta.get(name)?.total ?? 0,
+        })),
+        byDay: freeByDay,
+      };
+      rowSum += count;
+      periodTotals[p] += count;
+    }
+
+    grandTotal += rowSum;
+    return {
+      code: subj.code,
+      name: subj.name,
+      teacherCount: subj.teachers.length,
+      teachers: subj.teachers,
+      cells,
+      rowSum,
+    };
+  });
+
+  return {
+    isSingleDay,
+    activeDays,
+    periods: visiblePeriods,
+    rows,
+    periodTotals,
+    grandTotal,
+  };
+}
+
+function renderSubstituteDetailBox(detail) {
+  if (!detail) return '';
+  const { subjectName: sName, period, dayLabel, isSingleDay, cell } = detail;
+
+  let contentHtml = '';
+  if (isSingleDay) {
+    if (!cell.freeTeachers.length) {
+      contentHtml = `<div class="text-danger small"><i class="bi bi-exclamation-circle"></i> Không có giáo viên môn <b>${escapeHtml(sName)}</b> nào trống tiết ${period} vào ${escapeHtml(dayLabel)}.</div>`;
+    } else {
+      contentHtml = `
+        <div class="d-flex flex-wrap gap-2">
+          ${cell.freeTeachers
+            .map(
+              (t) => `<span class="badge text-bg-success-subtle text-success border border-success-subtle px-2 py-1 fs-6 fw-normal">
+                <i class="bi bi-person-check"></i> ${escapeHtml(t.name)} <small class="opacity-75">(${t.weekLoad} tiết/tuần)</small>
+              </span>`
+            )
+            .join('')}
+        </div>`;
+    }
+  } else {
+    const dayBlocks = cell.byDay
+      .map((dItem) => {
+        const list = dItem.teachers.length
+          ? dItem.teachers.map((n) => `<span class="badge text-bg-light border text-dark fw-normal">${escapeHtml(n)}</span>`).join(' ')
+          : '<span class="text-muted small">Hết GV rảnh</span>';
+        return `<div class="mb-1"><b class="me-1">${escapeHtml(dItem.day.name)}:</b> ${list}</div>`;
+      })
+      .join('');
+    contentHtml = `<div class="small">${dayBlocks}</div>`;
+  }
+
+  return `
+    <div class="alert alert-info mt-3 mb-0 py-2 px-3" id="subDetailBox">
+      <div class="d-flex justify-content-between align-items-center mb-1">
+        <div>
+          <i class="bi bi-person-lines-fill"></i>
+          <b>GV môn ${escapeHtml(sName)} trống tiết ${period}</b> · <span class="text-muted">${escapeHtml(dayLabel)}</span>
+        </div>
+        <button type="button" class="btn-close btn-sm" id="btnCloseSubDetail" aria-label="Đóng"></button>
+      </div>
+      ${contentHtml}
+    </div>`;
+}
+
+function renderFreeSlotSection(ds, state, selectedDetail = null) {
+  const data = computeFreeTeachersBySubjectAndPeriod(ds, state);
+  const subjectOptions = (ds.subjects || [])
+    .slice()
+    .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'vi'))
+    .map((s) => `<option value="${escapeHtml(s.code)}" ${state.subjectCode === s.code ? 'selected' : ''}>${escapeHtml(s.name)}</option>`)
+    .join('');
+
+  const dayOptions = DAYS
+    .map((d) => `<option value="${d.n}" ${String(state.day) === String(d.n) ? 'selected' : ''}>${escapeHtml(d.name)}</option>`)
+    .join('');
+
+  const periodHeaders = data.periods.map((p) => `<th class="text-center">Tiết ${p}</th>`).join('');
+  const periodFooters = data.periods
+    .map((p) => `<th class="text-center text-primary">${data.periodTotals[p] ?? 0}</th>`)
+    .join('');
+
+  const bodyHtml = data.rows.length
+    ? data.rows
+        .map((r) => {
+          const cellsHtml = data.periods
+            .map((p) => {
+              const c = r.cells[p];
+              const count = c?.count ?? 0;
+              const label = data.isSingleDay
+                ? (count > 0 ? `${count} GV` : '0')
+                : String(count);
+              const cls = count === 0
+                ? 'text-danger opacity-50'
+                : 'text-success fw-semibold';
+              const isSelected =
+                selectedDetail &&
+                selectedDetail.subjectCode === r.code &&
+                selectedDetail.period === p;
+
+              const tooltipNames = data.isSingleDay
+                ? c.freeTeachers.map((x) => x.name).join(', ')
+                : c.byDay.filter((x) => x.teachers.length).map((x) => `${x.day.short}: ${x.teachers.join(', ')}`).join(' | ');
+
+              return `
+                <td class="text-center p-1">
+                  <button type="button"
+                    class="btn btn-sm w-100 ${isSelected ? 'btn-primary' : 'btn-light'} ${isSelected ? '' : cls}"
+                    data-sub-cell="${escapeHtml(r.code)}|${p}"
+                    title="${escapeHtml(tooltipNames || 'Không có GV rảnh')}">
+                    ${escapeHtml(label)}
+                  </button>
+                </td>`;
+            })
+            .join('');
+
+          return `
+            <tr>
+              <td>
+                <span class="d-inline-flex align-items-center gap-2">
+                  <span style="width:10px;height:10px;border-radius:50%;background:${subjectColor(r.code)};display:inline-block"></span>
+                  <b>${escapeHtml(r.name)}</b>
+                </span>
+              </td>
+              <td class="text-center" title="${escapeHtml(r.teachers.join(', '))}">${r.teacherCount}</td>
+              ${cellsHtml}
+              <td class="text-center fw-bold">${data.isSingleDay ? '—' : r.rowSum}</td>
+            </tr>`;
+        })
+        .join('')
+    : `<tr><td colspan="${data.periods.length + 3}" class="text-center text-muted py-3">Không có dữ liệu phù hợp bộ lọc.</td></tr>`;
+
+  const scopeHint = data.isSingleDay
+    ? `Hiển thị <b>số GV cùng môn đang rảnh</b> trong <b>${escapeHtml(dayName(Number(state.day)))}</b> — bấm vào từng ô để xem danh sách GV có thể dạy thay.`
+    : `Hiển thị <b>tổng lượt GV rảnh (GV × ngày)</b> cả tuần — chọn một <b>Thứ</b> cụ thể để xem danh sách GV rảnh từng tiết.`;
+
+  return `
+    <div class="glass card-pad mb-3" id="freeSlotBySubjectCard">
+      <div class="card-title-row flex-wrap gap-2 mb-2">
+        <div>
+          <h6 class="mb-0"><i class="bi bi-person-plus"></i> Giáo viên trống tiết theo môn &amp; tiết (hỗ trợ dạy thay)</h6>
+          <small class="text-muted">${scopeHint}</small>
+        </div>
+        <div class="d-flex flex-wrap gap-2 align-items-center no-export">
+          <select id="fsSubject" class="form-select form-select-sm" style="width:auto;min-width:160px" aria-label="Lọc môn học">
+            <option value="ALL" ${state.subjectCode === 'ALL' ? 'selected' : ''}>Tất cả môn học</option>
+            ${subjectOptions}
+          </select>
+          <select id="fsDay" class="form-select form-select-sm" style="width:auto" aria-label="Chọn ngày">
+            <option value="ALL" ${state.day === 'ALL' ? 'selected' : ''}>Cả tuần (T2–T7)</option>
+            ${dayOptions}
+          </select>
+          <div class="btn-group btn-group-sm" role="group" aria-label="Lọc buổi">
+            <button type="button" class="btn ${state.session === 'all' ? 'btn-primary' : 'btn-light'}" data-fs-ses="all">Tất cả</button>
+            <button type="button" class="btn ${state.session === 'am' ? 'btn-primary' : 'btn-light'}" data-fs-ses="am">Sáng</button>
+            <button type="button" class="btn ${state.session === 'pm' ? 'btn-primary' : 'btn-light'}" data-fs-ses="pm">Chiều</button>
+          </div>
+          <button type="button" class="btn btn-sm btn-outline-success" id="btnExportFreeSlotCsv" title="Xuất bảng CSV">
+            <i class="bi bi-filetype-csv"></i> CSV
+          </button>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-bordered table-hover align-middle mb-0" id="freeSlotBySubjectTable">
+          <thead class="table-light">
+            <tr>
+              <th>Môn học</th>
+              <th class="text-center">Tổng GV</th>
+              ${periodHeaders}
+              <th class="text-center">${data.isSingleDay ? '—' : 'Tổng lượt'}</th>
+            </tr>
+          </thead>
+          <tbody>${bodyHtml}</tbody>
+          <tfoot class="table-light">
+            <tr>
+              <th>Tổng ${data.isSingleDay ? 'GV rảnh' : 'lượt rảnh'} theo tiết</th>
+              <th class="text-center">—</th>
+              ${periodFooters}
+              <th class="text-center text-primary">${data.isSingleDay ? '—' : data.grandTotal}</th>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <div id="subDetailHost">${renderSubstituteDetailBox(selectedDetail)}</div>
+    </div>`;
+}
+
+function exportFreeSlotCsv(data, ds) {
+  const headers = ['Môn học', 'Tổng GV', ...data.periods.map((p) => `Tiết ${p}`), ...(data.isSingleDay ? [] : ['Tổng lượt rảnh'])];
+  const lines = [headers];
+  for (const r of data.rows) {
+    const pVals = data.periods.map((p) => r.cells[p]?.count ?? 0);
+    lines.push([r.name, r.teacherCount, ...pVals, ...(data.isSingleDay ? [] : [r.rowSum])]);
+  }
+  lines.push([
+    'Tổng theo tiết',
+    '',
+    ...data.periods.map((p) => data.periodTotals[p] ?? 0),
+    ...(data.isSingleDay ? [] : [data.grandTotal]),
+  ]);
+
+  const csv = lines
+    .map((row) => row.map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(','))
+    .join('\r\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = safeName(`gv-trong-tiet-day-thay-${ds.meta?.week || 'tkb'}`) + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 /* ---------- Các biểu đồ ---------- */
@@ -173,15 +480,30 @@ export function renderStats(host, ds, ctx) {
   const busiest = st.teachersSorted.slice(0, 5);
   const avg = st.teachersSorted.length ? (st.teachersSorted.reduce((a, t) => a + t.total, 0) / st.teachersSorted.length).toFixed(1) : 0;
 
+  // Mặc định chọn hôm nay (nếu T2..T7) để tiện xem GV trống tiết dạy thay ngay
+  const todayNum = new Date().getDay();
+  const defaultDay = todayNum >= 1 && todayNum <= 6 ? String(todayNum + 1) : '2';
+
+  ctx.state.freeSlotFilter = {
+    subjectCode: 'ALL',
+    day: defaultDay,
+    session: 'all',
+    ...(ctx.state.freeSlotFilter || {}),
+  };
+  let selectedDetail = null;
+
   host.innerHTML = `
     <div class="page-head"><div><h2><i class="bi bi-bar-chart-line"></i> Thống Kê</h2>
-      <p class="text-muted mb-0">Biểu đồ trực quan – mỗi biểu đồ có thể xuất PNG.</p></div></div>
+      <p class="text-muted mb-0">Tra cứu GV trống tiết theo môn &amp; tiết để bố trí dạy thay, cùng biểu đồ trực quan.</p></div></div>
     <div class="row g-3 mb-3">
       <div class="col-6 col-lg-3"><div class="stat-card glass"><span class="stat-ic bg-primary-soft"><i class="bi bi-calculator"></i></span><div><div class="stat-v">${avg}</div><div class="stat-l">Tiết TB / giáo viên</div></div></div></div>
       <div class="col-6 col-lg-3"><div class="stat-card glass"><span class="stat-ic bg-danger-soft"><i class="bi bi-lightning-charge"></i></span><div><div class="stat-v">${busiest[0]?.total ?? 0}</div><div class="stat-l">Tiết nhiều nhất${busiest[0] ? ` – ${escapeHtml(busiest[0].name.split(' ').slice(-2).join(' '))}` : ''}</div></div></div></div>
       <div class="col-6 col-lg-3"><div class="stat-card glass"><span class="stat-ic bg-success-soft"><i class="bi bi-person-check"></i></span><div><div class="stat-v">${st.teachersSorted.length}</div><div class="stat-l">GV có tiết</div></div></div></div>
       <div class="col-6 col-lg-3"><div class="stat-card glass"><span class="stat-ic bg-warning-soft"><i class="bi bi-person-dash"></i></span><div><div class="stat-v">${ds.teachers.length - st.teachersSorted.length}</div><div class="stat-l">GV chưa có tiết</div></div></div></div>
     </div>
+
+    <div id="freeSlotHost">${renderFreeSlotSection(ds, ctx.state.freeSlotFilter, selectedDetail)}</div>
+
     <div class="row g-3">
       ${chartCard('chTeacherAll', 'Số tiết theo giáo viên (tất cả)', rowsH, 'col-12')}
       ${chartCard('chSubject', 'Tỷ lệ tiết theo môn (Pie)', 360)}
@@ -191,6 +513,63 @@ export function renderStats(host, ds, ctx) {
       ${chartCard('chDay', 'Tải giảng dạy theo ngày (Line)', 320)}
       ${chartCard('chPeriod', 'Tải theo tiết học (Line)', 320)}
     </div>`;
+
+  const refreshFreeSlot = () => {
+    const fsHost = host.querySelector('#freeSlotHost');
+    if (!fsHost) return;
+    fsHost.innerHTML = renderFreeSlotSection(ds, ctx.state.freeSlotFilter, selectedDetail);
+
+    fsHost.querySelector('#fsSubject')?.addEventListener('change', (e) => {
+      ctx.state.freeSlotFilter.subjectCode = e.target.value;
+      selectedDetail = null;
+      refreshFreeSlot();
+    });
+    fsHost.querySelector('#fsDay')?.addEventListener('change', (e) => {
+      ctx.state.freeSlotFilter.day = e.target.value;
+      selectedDetail = null;
+      refreshFreeSlot();
+    });
+    fsHost.querySelectorAll('[data-fs-ses]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        ctx.state.freeSlotFilter.session = btn.dataset.fsSes;
+        selectedDetail = null;
+        refreshFreeSlot();
+      });
+    });
+    fsHost.querySelectorAll('[data-sub-cell]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const [sCode, pStr] = btn.dataset.subCell.split('|');
+        const period = Number(pStr);
+        const computed = computeFreeTeachersBySubjectAndPeriod(ds, ctx.state.freeSlotFilter);
+        const row = computed.rows.find((x) => x.code === sCode);
+        const cell = row?.cells[period];
+        if (!row || !cell) return;
+
+        if (selectedDetail && selectedDetail.subjectCode === sCode && selectedDetail.period === period) {
+          selectedDetail = null;
+        } else {
+          selectedDetail = {
+            subjectCode: sCode,
+            subjectName: row.name,
+            period,
+            dayLabel: computed.isSingleDay ? dayName(Number(ctx.state.freeSlotFilter.day)) : 'Cả tuần (T2–T7)',
+            isSingleDay: computed.isSingleDay,
+            cell,
+          };
+        }
+        refreshFreeSlot();
+      });
+    });
+    fsHost.querySelector('#btnCloseSubDetail')?.addEventListener('click', () => {
+      selectedDetail = null;
+      refreshFreeSlot();
+    });
+    fsHost.querySelector('#btnExportFreeSlotCsv')?.addEventListener('click', () => {
+      exportFreeSlotCsv(computeFreeTeachersBySubjectAndPeriod(ds, ctx.state.freeSlotFilter), ds);
+    });
+  };
+  refreshFreeSlot();
+
   drawTeacherBar('chTeacherAll', ds, st, 0);
   drawSubject('chSubject', ds, 'pie');
   drawSubject('chSubjectBar', ds, 'doughnut');
